@@ -1,10 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { api, API, STREAM, getToken, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Badge } from "@/components/ui/badge";
 import { UploadZone } from "@/components/upload-zone";
 import { FolderUpload } from "@/components/folder-upload";
 import { ImportURL } from "@/components/import-url";
@@ -15,7 +20,7 @@ import { useToast } from "@/components/toast";
 import { ShareModal } from "@/components/share-modal";
 import { VersionsModal } from "@/components/versions-modal";
 import { formatBytes, formatDate, classify } from "@/lib/format";
-import { Trash2, Download, FileText, FileVideo, FileAudio, FileImage, RefreshCw, Copy, Check, ExternalLink, Share2, Globe, History, Folder, FolderUp, ChevronRight, Home } from "lucide-react";
+import { Trash2, Download, FileText, FileVideo, FileAudio, FileImage, RefreshCw, Copy, Check, ExternalLink, Share2, Globe, History, Folder, FolderUp, ChevronRight, Home, FolderOpen, Upload as UploadIcon } from "lucide-react";
 
 interface ObjectDTO {
   key: string;
@@ -278,28 +283,42 @@ export default function BucketPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-2xl font-bold min-w-0 break-all">
-          <span className="text-muted">Buckets / </span>
-          <span className="font-mono">{name}</span>
-        </h1>
-        <Button variant="ghost" onClick={() => void load()}>
-          <RefreshCw size={14} className="mr-1" /> Refresh
-        </Button>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow={
+          <Link href="/dashboard/buckets" className="hover:text-text transition-colors">Buckets</Link>
+        }
+        title={<span className="font-mono break-all">{name}</span>}
+        description={
+          <span className="flex items-center gap-2 flex-wrap">
+            {isPublic && <Badge variant="warning"><Globe size={10} /> Public</Badge>}
+            {versioning && <Badge variant="neutral"><History size={10} /> Versioned</Badge>}
+            <span>{objects.length} {objects.length === 1 ? "file" : "files"}{folders.length > 0 && <>, {folders.length} {folders.length === 1 ? "folder" : "folders"}</>}</span>
+          </span>
+        }
+        actions={
+          <Button variant="secondary" size="md" onClick={() => void load()}>
+            <RefreshCw size={14} /> Refresh
+          </Button>
+        }
+      />
 
       {isPublic && <PublicBanner bucket={name} />}
 
-      <Card>
-        <h2 className="text-sm font-semibold mb-3">
-          Upload {path && <span className="text-muted font-normal">→ <span className="font-mono">{path}</span></span>}
-        </h2>
+      {/* Upload section — elevated card pulls the eye, this is the primary
+          action on bucket pages. */}
+      <Card variant="elevated" className="mb-6">
+        <SectionHeader
+          title={<span className="inline-flex items-center gap-2"><UploadIcon size={14} className="text-muted" />Upload files</span>}
+          description={
+            path
+              ? <>Files will land in <span className="font-mono text-text">{path}</span></>
+              : <>Drop files anywhere or click to browse.</>
+          }
+        />
         <UploadZone bucket={name} prefix={path} onComplete={() => void load()} />
-        <div className="mt-4 border-t border-border pt-3">
-          <div className="text-[11px] uppercase tracking-wide text-muted mb-2">
-            Other ways to add files
-          </div>
+        <div className="mt-5 pt-4 border-t border-border-subtle">
+          <p className="text-[11px] uppercase tracking-wider text-muted mb-2.5">Other ways to add files</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <FolderUpload bucket={name} prefix={path} onComplete={() => void load()} />
             <ImportURL bucket={name} prefix={path} onComplete={() => void load()} />
@@ -310,17 +329,22 @@ export default function BucketPage() {
         </div>
       </Card>
 
-      {selected && <PreviewCard bucket={name} obj={selected} versioning={versioning} onClose={() => setSelected(null)} onReload={() => void load()} />}
+      {selected && (
+        <div className="mb-6">
+          <PreviewCard bucket={name} obj={selected} versioning={versioning} onClose={() => setSelected(null)} onReload={() => void load()} />
+        </div>
+      )}
 
+      {/* File list — toolbar + list. */}
       <Card>
-        <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <Breadcrumb path={path} onNavigate={navigateTo} />
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <NewFolderButton path={path} onCreated={() => void load()} bucket={name} />
             {picks.size > 0 && (
               <button
                 onClick={(e) => bulkDelete(e.shiftKey)}
-                className="text-xs text-danger hover:underline inline-flex items-center gap-1"
+                className="text-xs text-danger inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md hover:bg-danger/10 transition-colors"
                 title="Click to trash; Shift-click to permanently delete (skip trash)"
               >
                 <Trash2 size={12} /> Delete {picks.size} selected
@@ -328,24 +352,29 @@ export default function BucketPage() {
             )}
           </div>
         </div>
-        {err && <p className="text-sm text-danger">{err}</p>}
+        {err && (
+          <div className="mb-3 text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
+        )}
         {folders.length === 0 && objects.length === 0 ? (
-          <p className="text-sm text-muted">
-            {path ? "This folder is empty." : "Empty bucket. Upload something above."}
-          </p>
+          <EmptyState
+            compact
+            icon={<FolderOpen size={18} />}
+            title={path ? "This folder is empty" : "Empty bucket"}
+            description={path ? "Upload files using the panel above — they'll land here." : "Drop files in the upload panel above to get started."}
+          />
         ) : (
           <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="stack-rows w-full text-sm sm:table-fixed min-w-[600px] sm:min-w-0">
             <colgroup>
-              <col style={{ width: "30px" }} />
+              <col style={{ width: "36px" }} />
               <col />
               <col style={{ width: "90px" }} />
-              <col style={{ width: "180px" }} />
-              <col style={{ width: "70px" }} />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "76px" }} />
             </colgroup>
-            <thead className="text-xs text-muted uppercase">
-              <tr>
-                <th className="pb-2">
+            <thead className="text-[10px] text-muted uppercase tracking-wider">
+              <tr className="border-b border-border-subtle">
+                <th className="pb-2.5 pl-2">
                   <input
                     type="checkbox"
                     checked={picks.size === objects.length && objects.length > 0}
@@ -353,23 +382,23 @@ export default function BucketPage() {
                       if (el) el.indeterminate = picks.size > 0 && picks.size < objects.length;
                     }}
                     onChange={(e) => toggleAll(e.target.checked)}
-                    className="cursor-pointer"
+                    className="cursor-pointer accent-text"
                     title="Select all visible files (folders excluded)"
                   />
                 </th>
-                <th className="text-left pb-2">Name</th>
-                <th className="text-left pb-2">Size</th>
-                <th className="text-left pb-2">Modified</th>
-                <th className="text-right pb-2">Actions</th>
+                <th className="text-left pb-2.5 font-medium">Name</th>
+                <th className="text-left pb-2.5 font-medium">Size</th>
+                <th className="text-left pb-2.5 font-medium">Modified</th>
+                <th className="text-right pb-2.5 font-medium pr-1">Actions</th>
               </tr>
             </thead>
             <tbody>
               {path && (
-                <tr className="border-t border-border hover:bg-panel cursor-pointer"
+                <tr className="border-b border-border-subtle hover:bg-surface cursor-pointer transition-colors"
                     onClick={() => navigateTo(parentOf(path))}>
-                  <td className="py-2" data-label="" />
-                  <td className="py-2 pr-3 min-w-0" data-label="Name">
-                    <span className="flex items-center gap-2 font-mono text-muted">
+                  <td className="py-2.5 pl-2" data-label="" />
+                  <td className="py-2.5 pr-3 min-w-0" data-label="Name">
+                    <span className="flex items-center gap-2.5 text-muted">
                       <FolderUp size={14} /> ..
                     </span>
                   </td>
@@ -380,21 +409,22 @@ export default function BucketPage() {
                 const display = trimPrefix(cp, path).replace(/\/$/, "");
                 return (
                   <tr key={cp}
-                      className={`border-t border-border hover:bg-panel cursor-pointer group ${cursor === i ? "bg-panel" : ""}`}
+                      className={`border-b border-border-subtle hover:bg-surface cursor-pointer group transition-colors ${cursor === i ? "bg-surface" : ""}`}
                       onClick={() => navigateTo(cp)}>
-                    <td className="py-2" data-label="" />
-                    <td className="py-2 pr-3 min-w-0" data-label="Name">
-                      <span className="flex items-center gap-2 font-mono">
-                        <Folder size={14} className="text-accent" />
-                        <span className="truncate">{display}/</span>
+                    <td className="py-2.5 pl-2" data-label="" />
+                    <td className="py-2.5 pr-3 min-w-0" data-label="Name">
+                      <span className="flex items-center gap-2.5">
+                        <Folder size={14} className="text-link shrink-0" fill="currentColor" fillOpacity={0.1} />
+                        <span className="truncate font-medium">{display}</span>
+                        <span className="text-muted">/</span>
                       </span>
                     </td>
-                    <td className="py-2 text-muted text-xs" data-label="Size">folder</td>
-                    <td className="py-2" data-label="Modified" />
-                    <td className="py-2 text-right actions" data-label="">
+                    <td className="py-2.5 text-muted text-xs" data-label="Size">folder</td>
+                    <td className="py-2.5" data-label="Modified" />
+                    <td className="py-2.5 text-right actions pr-1" data-label="">
                       <button
                         onClick={(e) => { e.stopPropagation(); void deleteFolder(cp); }}
-                        className="text-danger hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+                        className="p-1.5 rounded-md text-muted hover:text-danger hover:bg-danger/10 opacity-0 group-hover:opacity-100 transition"
                         title={`Delete folder ${cp} and everything in it`}
                       >
                         <Trash2 size={14} />
@@ -408,43 +438,45 @@ export default function BucketPage() {
                 const rowIdx = folders.length + i;
                 return (
                   <tr key={o.key}
-                      className={`border-t border-border hover:bg-panel ${cursor === rowIdx ? "bg-panel" : ""}`}>
-                    <td className="py-2" data-label="">
+                      className={`border-b border-border-subtle hover:bg-surface group transition-colors ${cursor === rowIdx ? "bg-surface" : ""}`}>
+                    <td className="py-2 pl-2" data-label="">
                       <input
                         type="checkbox"
                         checked={picks.has(o.key)}
                         onChange={() => togglePick(o.key)}
                         onClick={(e) => e.stopPropagation()}
-                        className="cursor-pointer"
+                        className="cursor-pointer accent-text"
                       />
                     </td>
                     <td className="py-2 pr-3 min-w-0" data-label="Name">
                       <button
                         onClick={() => open(o)}
-                        className="flex items-center gap-2 font-mono hover:text-accent text-left w-full min-w-0"
+                        className="flex items-center gap-2.5 text-left w-full min-w-0 group/file"
                         title={o.key}
                       >
                         <Thumb bucket={name} objectKey={o.key} contentType={o.contentType} size={28} />
-                        <span className="truncate">{display}</span>
+                        <span className="truncate font-medium text-text-soft group-hover/file:text-link transition-colors">{display}</span>
                       </button>
                     </td>
-                    <td className="py-2 text-muted whitespace-nowrap" data-label="Size">{formatBytes(o.size)}</td>
+                    <td className="py-2 text-muted text-xs whitespace-nowrap tabular-nums" data-label="Size">{formatBytes(o.size)}</td>
                     <td className="py-2 text-muted text-xs whitespace-nowrap" data-label="Modified">{formatDate(o.lastModified)}</td>
-                    <td className="py-2 text-right space-x-2 actions" data-label="">
-                      <button
-                        onClick={() => download(o.key)}
-                        className="text-muted hover:text-accent"
-                        title="Download"
-                      >
-                        <Download size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => remove(o.key, e.shiftKey)}
-                        className="text-danger hover:text-red-400"
-                        title="Click to trash; Shift-click to permanently delete (skip trash)"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                    <td className="py-2 text-right actions pr-1" data-label="">
+                      <div className="inline-flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => download(o.key)}
+                          className="p-1.5 rounded-md text-muted hover:text-text hover:bg-bg transition-colors"
+                          title="Download"
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
+                          onClick={(e) => remove(o.key, e.shiftKey)}
+                          className="p-1.5 rounded-md text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+                          title="Click to trash; Shift-click to permanently delete (skip trash)"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

@@ -5,15 +5,13 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { SectionHeader } from "@/components/ui/section";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Stat } from "@/components/ui/stat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StorageBreakdown } from "@/components/storage-breakdown";
 import { QuotaRequestWidget } from "@/components/quota-request-widget";
 import { ActiveOps } from "@/components/active-ops";
-import { Database, FolderPlus, ArrowRight, HardDrive, Layers } from "lucide-react";
+import { Database, FolderPlus, ArrowRight, HardDrive } from "lucide-react";
 
 interface Me {
   id: string; email: string; name: string; role: string;
@@ -31,8 +29,6 @@ export default function OverviewPage() {
       api<{ buckets: Bucket[] }>("/").then((r) => setBuckets(r.buckets)).catch(() => {});
     };
     load();
-    // Refresh storage usage every 8s so the bar reflects transcode publishes
-    // and uploads without a manual reload.
     const t = window.setInterval(load, 8000);
     return () => window.clearInterval(t);
   }, []);
@@ -41,6 +37,7 @@ export default function OverviewPage() {
 
   const usagePct = me.quotaBytes > 0 ? Math.min(100, Math.round((me.usedBytes / me.quotaBytes) * 100)) : 0;
   const firstName = me.name?.split(" ")[0] || me.name || "";
+  const pctColor = usagePct >= 90 ? "text-danger" : usagePct >= 75 ? "text-warning" : "text-success";
 
   return (
     <div>
@@ -62,91 +59,138 @@ export default function OverviewPage() {
         }
       />
 
-      {/* Stats row — at-a-glance numbers above the fold. */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
-        <Card>
-          <Stat
-            label="Storage used"
-            value={`${usagePct}%`}
-            hint={`of your quota`}
-            icon={<HardDrive size={11} />}
-          />
-        </Card>
-        <Card>
-          <Stat
-            label="Buckets"
-            value={buckets.length}
-            hint={buckets.length === 1 ? "1 container" : `${buckets.length} containers`}
-            icon={<Database size={11} />}
-          />
-        </Card>
-        <Card className="col-span-2 sm:col-span-1">
-          <Stat
-            label="Plan"
-            value={
-              <span className="capitalize">{me.role === "admin" ? "Administrator" : "User"}</span>
-            }
-            hint={me.role === "admin" ? "Full system access" : "Standard access"}
-            icon={<Layers size={11} />}
-          />
-        </Card>
-      </div>
+      {/* Storage strip — thin, full-width, at-a-glance. Click anywhere to manage. */}
+      <Link href="/dashboard/buckets" className="block group mb-8">
+        <Card className="hover:border-text/30 transition-colors">
+          <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
+            <div className="flex items-center gap-2.5 shrink-0">
+              <div className="w-9 h-9 rounded-lg bg-surface flex items-center justify-center text-muted">
+                <HardDrive size={16} />
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-muted">Storage used</p>
+                <p className={`text-xl font-semibold tabular-nums ${pctColor}`}>{usagePct}%</p>
+              </div>
+            </div>
 
-      {/* Live operations (uploads, imports, transcodes). Hides itself when nothing's running. */}
+            {/* Progress bar — flex-1 so it grows */}
+            <div className="flex-1 min-w-[180px]">
+              <div className="h-2.5 bg-surface rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    usagePct >= 90 ? "bg-danger" : usagePct >= 75 ? "bg-warning" : "bg-text"
+                  }`}
+                  style={{ width: `${usagePct}%` }}
+                />
+              </div>
+              <div className="flex justify-between mt-1.5 text-[11px] text-muted">
+                <span>{formatBytesShort(me.usedBytes)} used</span>
+                <span>{formatBytesShort(me.quotaBytes)} total</span>
+              </div>
+            </div>
+
+            <ArrowRight size={16} className="text-muted shrink-0 group-hover:text-text group-hover:translate-x-0.5 transition-all" />
+          </div>
+        </Card>
+      </Link>
+
+      {/* Live operations — slim. Hides when nothing's running. */}
       <ActiveOps />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-6">
-        {/* Storage breakdown — the hero card on this page. */}
-        <Card variant="elevated" className="lg:col-span-2">
-          <SectionHeader
-            title="Storage usage"
-            description="What's living in each bucket, including transcoded variants and trash."
-          />
+      {/* Buckets — the main content of this page. */}
+      <section>
+        <div className="flex items-end justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Your buckets</h2>
+            <p className="text-xs text-muted mt-0.5">
+              {buckets.length === 0 ? "Where your files live." : `${buckets.length} ${buckets.length === 1 ? "container" : "containers"}`}
+            </p>
+          </div>
+          {buckets.length > 0 && (
+            <Link
+              href="/dashboard/buckets"
+              className="text-xs text-link hover:underline inline-flex items-center gap-0.5"
+            >
+              Manage all <ArrowRight size={11} />
+            </Link>
+          )}
+        </div>
+
+        {buckets.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={<Database size={22} />}
+              title="No buckets yet"
+              description="Buckets are isolated containers for your files. Create one to start uploading."
+              action={
+                <Link href="/dashboard/buckets">
+                  <Button><FolderPlus size={14} />Create your first bucket</Button>
+                </Link>
+              }
+            />
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            {buckets.slice(0, 8).map((b) => (
+              <Link
+                key={b.id}
+                href={`/dashboard/buckets/${b.name}`}
+                className="group"
+              >
+                <Card className="h-full hover:border-text/30 hover:shadow-elevated transition-all">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-surface flex items-center justify-center text-muted shrink-0 group-hover:text-text transition-colors">
+                      <Database size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold tracking-tight truncate group-hover:text-link transition-colors">
+                        {b.name}
+                      </h3>
+                      <p className="text-[11px] text-muted mt-0.5">
+                        Created {new Date(b.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </p>
+                    </div>
+                    <ArrowRight size={14} className="text-muted shrink-0 group-hover:text-text group-hover:translate-x-0.5 transition-all" />
+                  </div>
+                </Card>
+              </Link>
+            ))}
+            {/* "Add bucket" tile lives at the end of the grid so the action is in-context */}
+            <Link href="/dashboard/buckets" className="group">
+              <Card className="h-full border-dashed hover:border-text/40 transition-colors flex items-center justify-center">
+                <div className="flex items-center gap-2 text-sm text-muted group-hover:text-text transition-colors">
+                  <FolderPlus size={16} />
+                  New bucket
+                </div>
+              </Card>
+            </Link>
+          </div>
+        )}
+      </section>
+
+      {/* Storage breakdown — relegated to its own section below buckets.
+          Less prominent but still here. Includes the quota-request CTA. */}
+      <section className="mt-10">
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold tracking-tight">Storage breakdown</h2>
+          <p className="text-xs text-muted mt-0.5">How your space is allocated across buckets and trash.</p>
+        </div>
+        <Card>
           <StorageBreakdown />
           <div className="mt-4">
             <QuotaRequestWidget />
           </div>
         </Card>
-
-        {/* Buckets shortcut. */}
-        <Card>
-          <SectionHeader
-            title="Your buckets"
-            actions={
-              <Link href="/dashboard/buckets" className="text-xs text-link hover:underline inline-flex items-center gap-0.5">
-                View all <ArrowRight size={11} />
-              </Link>
-            }
-          />
-          {buckets.length === 0 ? (
-            <EmptyState
-              compact
-              icon={<Database size={18} />}
-              title="No buckets yet"
-              description="Create one to start uploading files."
-              action={
-                <Link href="/dashboard/buckets">
-                  <Button size="sm">Go to Buckets</Button>
-                </Link>
-              }
-            />
-          ) : (
-            <ul className="-mx-2">
-              {buckets.slice(0, 8).map((b) => (
-                <li key={b.id}>
-                  <Link
-                    href={`/dashboard/buckets/${b.name}`}
-                    className="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm text-text-soft hover:text-text hover:bg-surface transition-colors"
-                  >
-                    <Database size={14} className="text-muted shrink-0" />
-                    <span className="truncate font-medium">{b.name}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+      </section>
     </div>
   );
+}
+
+// Compact format ("169 MB", "1.5 GB") instead of "169.0 MB" — easier to scan.
+function formatBytesShort(n: number): string {
+  if (n === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  const val = n / Math.pow(1024, i);
+  return (val < 10 && i > 0 ? val.toFixed(1) : Math.round(val)) + " " + units[i];
 }
