@@ -18,7 +18,7 @@ import { userStore, User } from "@/lib/user";
 import {
   Database, Key, LayoutDashboard, LogOut, Users, FileSearch, Activity,
   Trash2, Sparkles, Search, Link2, Shield, ScrollText, BookOpen,
-  Inbox, Menu, X,
+  Inbox, Menu, X, ExternalLink,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/format";
@@ -31,8 +31,11 @@ const userItems = [
   { href: "/dashboard/keys",     label: "API Keys",     icon: Key },
   { href: "/dashboard/security", label: "Security",     icon: Shield },
   { href: "/dashboard/trash",    label: "Trash",        icon: Trash2 },
-  { href: "/dashboard/docs",     label: "Docs",         icon: BookOpen },
 ];
+
+// External docs site — opens in a new tab, rendered separately below
+// the main nav items so users can tell it leaves the app.
+const DOCS_URL = "https://developers.personals3.tech";
 
 const adminItems = [
   { href: "/dashboard/admin/users",    label: "Users",     icon: Users },
@@ -100,14 +103,26 @@ export function Nav() {
         )}
       </nav>
 
-      <div className="mt-6 flex items-center gap-2">
-        <button
-          onClick={() => { setToken(null); userStore.set(null); router.push("/login"); }}
-          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-sm text-text-soft hover:bg-surface hover:text-text transition-colors"
+      <div className="mt-6 space-y-px">
+        <a
+          href={DOCS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13.5px] text-text-soft hover:bg-surface/60 hover:text-text transition-colors"
         >
-          <LogOut size={15} /> Log out
-        </button>
-        <ThemeToggle />
+          <BookOpen size={15} className="text-muted" />
+          <span>Docs</span>
+          <ExternalLink size={11} className="ml-auto text-muted" />
+        </a>
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={() => { setToken(null); userStore.set(null); router.push("/login"); }}
+            className="flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-sm text-text-soft hover:bg-surface hover:text-text transition-colors"
+          >
+            <LogOut size={15} /> Log out
+          </button>
+          <ThemeToggle />
+        </div>
       </div>
     </>
   );
