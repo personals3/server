@@ -6,6 +6,12 @@
 // a real introduction — hero, three CTAs, a glance at what's inside,
 // and links to the docs. Single-column, generous whitespace, the same
 // warm-stone palette + Inter typography as the rest of the app.
+//
+// Docs live on developers.personals3.tech (Cloudflare Pages, separate
+// Astro Starlight build). All "docs" links here are external — plain
+// <a target="_blank"> so we don't drag people into the SPA router.
+
+const DOCS_BASE = "https://developers.personals3.tech";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -41,7 +47,7 @@ export default function HomePage() {
             <Database size={16} className="text-link" /> PersonalS3
           </Link>
           <nav className="hidden sm:flex items-center gap-5 text-sm text-text-soft">
-            <Link href="/docs" className="hover:text-text">Docs</Link>
+            <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer" className="hover:text-text">Docs ↗</a>
             <Link href="/login#request" className="hover:text-text">Request access</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3">
@@ -79,10 +85,10 @@ export default function HomePage() {
               className="px-5 py-2.5 border border-border text-sm font-medium rounded-full hover:border-text/40">
               Request access
             </Link>
-            <Link href="/docs"
+            <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer"
               className="px-5 py-2.5 text-text-soft text-sm font-medium rounded-full hover:text-text inline-flex items-center gap-1.5">
               <BookOpen size={14} /> Read the docs
-            </Link>
+            </a>
           </div>
         </div>
       </section>
@@ -122,10 +128,10 @@ export default function HomePage() {
               ctaHref="/login" ctaLabel="Sign in" />
             <Lane title="ps3 CLI" tag="for scripts"
               copy="Single binary. Cross-platform. Pipe-friendly output. Resumable uploads for big files."
-              ctaHref="/docs/account/installing-the-cli.html" ctaLabel="Install guide" />
+              ctaHref={`${DOCS_BASE}/account/installing-the-cli/`} ctaLabel="Install guide" external />
             <Lane title="HTTP API" tag="for integrations"
               copy="S3-compatible signing. JSON or XML responses. Field-by-field reference for every endpoint."
-              ctaHref="/docs/uploading/single-put-api.html" ctaLabel="API reference" />
+              ctaHref={`${DOCS_BASE}/uploading/single-put-api/`} ctaLabel="API reference" external />
           </div>
 
           <div className="mt-12 bg-codeBg border border-border rounded-lg p-4 sm:p-5 max-w-2xl font-mono text-sm overflow-x-auto">
@@ -157,10 +163,10 @@ curl -X PUT https://your-instance.example/api/my-bucket/photo.jpg \
               className="px-5 py-2.5 bg-text text-bg text-sm font-medium rounded-full hover:opacity-90 inline-flex items-center gap-1.5">
               Request access <ArrowRight size={13} />
             </Link>
-            <Link href="/docs"
+            <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer"
               className="px-5 py-2.5 border border-border text-sm font-medium rounded-full hover:border-text/40">
               Read the docs
-            </Link>
+            </a>
           </div>
         </div>
       </section>
@@ -170,9 +176,9 @@ curl -X PUT https://your-instance.example/api/my-bucket/photo.jpg \
         <div className="max-w-5xl mx-auto px-6 lg:px-10 py-8 flex flex-wrap items-center justify-between gap-4 text-xs text-muted">
           <span>© PersonalS3. Operated by this instance&apos;s administrator.</span>
           <nav className="flex gap-4">
-            <Link href="/docs" className="hover:text-text inline-flex items-center gap-1">
-              <BookOpen size={11} /> Docs
-            </Link>
+            <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer" className="hover:text-text inline-flex items-center gap-1">
+              <BookOpen size={11} /> Docs ↗
+            </a>
             <Link href="/login" className="hover:text-text inline-flex items-center gap-1">
               <KeyRound size={11} /> Sign in
             </Link>
@@ -199,10 +205,17 @@ function Pillar({ icon, title, children }: {
   );
 }
 
-function Lane({ title, tag, copy, ctaHref, ctaLabel }: {
+function Lane({ title, tag, copy, ctaHref, ctaLabel, external }: {
   title: string; tag: string; copy: string;
   ctaHref: string; ctaLabel: string;
+  external?: boolean;
 }) {
+  const linkClass = "text-sm font-medium text-text hover:text-link inline-flex items-center gap-1";
+  const linkBody = (
+    <>
+      {ctaLabel} {external ? "↗" : <ArrowRight size={12} />}
+    </>
+  );
   return (
     <div className="bg-surface border border-border rounded-xl p-6 flex flex-col gap-4 hover:border-text/30 transition-colors">
       <div className="flex items-baseline justify-between">
@@ -210,10 +223,15 @@ function Lane({ title, tag, copy, ctaHref, ctaLabel }: {
         <span className="text-[10px] uppercase tracking-[0.12em] text-muted">{tag}</span>
       </div>
       <p className="text-text-soft text-sm leading-relaxed flex-1">{copy}</p>
-      <Link href={ctaHref}
-        className="text-sm font-medium text-text hover:text-link inline-flex items-center gap-1">
-        {ctaLabel} <ArrowRight size={12} />
-      </Link>
+      {external ? (
+        <a href={ctaHref} target="_blank" rel="noopener noreferrer" className={linkClass}>
+          {linkBody}
+        </a>
+      ) : (
+        <Link href={ctaHref} className={linkClass}>
+          {linkBody}
+        </Link>
+      )}
     </div>
   );
 }
