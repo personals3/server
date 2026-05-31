@@ -13,14 +13,20 @@
 
 const DOCS_BASE = "https://developers.personals3.tech";
 
+// Footer attribution — configurable via NEXT_PUBLIC_OPERATOR_NAME and
+// NEXT_PUBLIC_OPERATOR_URL in .env. Re-build the dashboard image to apply
+// changes (Next.js inlines NEXT_PUBLIC_* at build time, see Dockerfile ARGs).
+const OPERATOR_NAME = process.env.NEXT_PUBLIC_OPERATOR_NAME?.trim() || "this instance's administrator";
+const OPERATOR_URL = process.env.NEXT_PUBLIC_OPERATOR_URL?.trim() || "";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getToken } from "@/lib/api";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
-  Database, BookOpen, KeyRound, ArrowRight, Upload, Share2,
-  PlayCircle, Wallet, Terminal,
+  BookOpen, KeyRound, ArrowRight, Upload, Share2,
+  PlayCircle,
 } from "lucide-react";
 
 export default function HomePage() {
@@ -44,7 +50,7 @@ export default function HomePage() {
       <header className="sticky top-0 z-30 backdrop-blur bg-bg/85 border-b border-border-subtle">
         <div className="max-w-6xl mx-auto h-16 px-6 lg:px-10 flex items-center gap-6">
           <Link href="/" className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-            <Database size={16} className="text-link" /> PersonalS3
+            <img src="/icon.svg" alt="" width={18} height={18} className="rounded" /> PersonalS3
           </Link>
           <nav className="hidden sm:flex items-center gap-5 text-sm text-text-soft">
             <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer" className="hover:text-text">Docs ↗</a>
@@ -174,7 +180,17 @@ curl -X PUT https://personals3.tech/api/my-bucket/photo.jpg \\
       {/* ---- Footer ---- */}
       <footer className="border-t border-border-subtle">
         <div className="max-w-5xl mx-auto px-6 lg:px-10 py-8 flex flex-wrap items-center justify-between gap-4 text-xs text-muted">
-          <span>© PersonalS3. Operated by this instance&apos;s administrator.</span>
+          <span>
+            © {new Date().getFullYear()} PersonalS3. Operated by{" "}
+            {OPERATOR_URL ? (
+              <a href={OPERATOR_URL} target="_blank" rel="noopener noreferrer" className="hover:text-text underline-offset-2 hover:underline">
+                {OPERATOR_NAME}
+              </a>
+            ) : (
+              OPERATOR_NAME
+            )}
+            .
+          </span>
           <nav className="flex gap-4">
             <a href={DOCS_BASE} target="_blank" rel="noopener noreferrer" className="hover:text-text inline-flex items-center gap-1">
               <BookOpen size={11} /> Docs ↗

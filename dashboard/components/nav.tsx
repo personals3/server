@@ -68,7 +68,10 @@ export function Nav() {
   const body = (
     <>
       <div className="mb-6">
-        <h1 className="text-lg font-semibold tracking-tight">PersonalS3</h1>
+        <h1 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+          <img src="/icon.svg" alt="" width={20} height={20} className="rounded" />
+          PersonalS3
+        </h1>
         <p className="text-xs text-muted mt-0.5">self-hosted storage</p>
         {user && (
           <div className="mt-4 pt-4 border-t border-border-subtle">

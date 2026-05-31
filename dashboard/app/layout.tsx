@@ -19,6 +19,9 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "PersonalS3 Dashboard",
   description: "Self-hosted S3 with media transcoding",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

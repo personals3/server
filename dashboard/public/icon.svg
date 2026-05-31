@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PersonalS3">
+  <defs>
+    <linearGradient id="ps3-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a221d"/>
+      <stop offset="1" stop-color="#15110e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square bucket -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#ps3-bg)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="13.5" fill="none"
+        stroke="#3a2f25" stroke-width="1"/>
+
+  <!-- Bold "S" — drawn as a path so it renders consistently without a web font -->
+  <path d="
+    M 36 17
+    L 26 17
+    C 21.5 17, 18 20.2, 18 24.6
+    C 18 28.7, 20.5 31.1, 26 31.9
+    L 34 33
+    C 36.6 33.4, 38 34.6, 38 36.6
+    C 38 38.9, 36.2 40.4, 33 40.4
+    L 22.5 40.4
+    L 22.5 46
+    L 34 46
+    C 40 46, 44 42.5, 44 37
+    C 44 31.7, 41 28.5, 35 27.7
+    L 27.5 26.6
+    C 25.2 26.3, 24 25.3, 24 23.6
+    C 24 21.6, 25.6 20.4, 28.4 20.4
+    L 36 20.4 Z"
+        fill="#f5f1eb"/>
+
+  <!-- Accent "3" superscript -->
+  <path d="
+    M 46 14
+    C 49.5 14, 52 16, 52 18.6
+    C 52 20.3, 50.8 21.4, 49.4 21.7
+    C 51 22, 52.3 23.2, 52.3 25
+    C 52.3 27.7, 49.7 29.8, 46 29.8
+    C 43 29.8, 40.5 28.4, 40 26.2
+    L 42.5 26.2
+    C 42.9 27.2, 44.2 27.8, 46 27.8
+    C 47.9 27.8, 49.4 26.7, 49.4 25
+    C 49.4 23.4, 48 22.6, 46 22.6
+    L 45 22.6
+    L 45 20.8
+    L 46 20.8
+    C 47.6 20.8, 48.9 20, 48.9 18.6
+    C 48.9 17.2, 47.6 16.4, 46 16.4
+    C 44.4 16.4, 43.2 17, 42.9 18
+    L 40.5 18
+    C 40.9 15.7, 43 14, 46 14 Z"
+        fill="#d4a574"/>
+</svg>

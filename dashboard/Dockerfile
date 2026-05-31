@@ -14,6 +14,15 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# Build-time public env vars — Next.js bakes NEXT_PUBLIC_* into the client
+# bundle during build, so they must be available NOW, not at runtime.
+# docker-compose passes these in via `build.args`.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_OPERATOR_NAME
+ARG NEXT_PUBLIC_OPERATOR_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_OPERATOR_NAME=$NEXT_PUBLIC_OPERATOR_NAME \
+    NEXT_PUBLIC_OPERATOR_URL=$NEXT_PUBLIC_OPERATOR_URL
 RUN npm run build
 
 # ---- runtime

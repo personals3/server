@@ -140,6 +140,12 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        # Next.js bakes NEXT_PUBLIC_* into the client bundle at build time.
+        # docker-compose pipes them from .env → Dockerfile ARG → ENV → bundle.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
+        NEXT_PUBLIC_OPERATOR_URL: ${NEXT_PUBLIC_OPERATOR_URL:-}
     container_name: s3-dashboard
     restart: unless-stopped
     depends_on:
@@ -150,6 +156,10 @@ services:
       # Override in .env if you front the dashboard with a different host
       # (e.g. dash.yourdomain.com calling api.yourdomain.com).
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+      # Optional attribution shown in the public landing-page footer.
+      # Leave blank for the default "Operated by this instance's administrator".
+      NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
+      NEXT_PUBLIC_OPERATOR_URL: ${NEXT_PUBLIC_OPERATOR_URL:-}
       NODE_ENV: production
       # Next.js standalone server reads these — without them it binds to
       # localhost:3000 inside the container, unreachable from the host.
