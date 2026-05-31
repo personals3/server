@@ -18,7 +18,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, getToken, setToken } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Database, ArrowRight, KeyRound, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, KeyRound, Mail, ShieldCheck } from "lucide-react";
 
 type Mode = "signin" | "request" | "forgot" | "reset" | "verify";
 
@@ -77,14 +77,14 @@ function LoginPageInner() {
   return (
     <div className="min-h-screen grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
       {/* Brand pane — hidden on mobile */}
-      <aside className="hidden lg:flex flex-col justify-between bg-surface border-r border-border p-12 xl:p-16">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Database size={16} className="text-link" />
+      <aside className="hidden lg:flex flex-col justify-between bg-surface border-r border-border-subtle p-12 xl:p-16">
+        <div className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <img src="/icon.svg" alt="" width={20} height={20} className="rounded" />
           PersonalS3
         </div>
         <div className="max-w-md space-y-6">
           <p className="text-xs uppercase tracking-[0.18em] text-muted">Self-hosted storage</p>
-          <h1 className="text-4xl xl:text-5xl font-semibold leading-[1.05] tracking-tight">
+          <h1 className="text-display lg:text-display-lg font-semibold text-text">
             Your own S3.
             <br />
             <span className="text-muted">Quiet, owned, accountable.</span>
@@ -105,8 +105,8 @@ function LoginPageInner() {
         <div className="absolute top-4 right-4"><ThemeToggle /></div>
 
         <div className="w-full max-w-md">
-          <div className="lg:hidden mb-8 flex items-center gap-2 text-sm font-medium">
-            <Database size={16} className="text-link" />
+          <div className="lg:hidden mb-8 flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <img src="/icon.svg" alt="" width={20} height={20} className="rounded" />
             PersonalS3
           </div>
 
