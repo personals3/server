@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Trash2, RotateCcw, RefreshCw, AlertTriangle, History as HistoryIcon } from "lucide-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { useToast } from "@/components/toast";
@@ -125,28 +127,29 @@ export default function TrashPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Trash</h1>
-        <Button variant="ghost" onClick={() => void load()}>
-          <RefreshCw size={14} className="mr-1" /> Refresh
-        </Button>
-      </div>
+    <div>
+      <PageHeader
+        title="Trash"
+        description={`${items.length} item${items.length === 1 ? "" : "s"} • ${formatBytes(totalBytes)} pending purge. Trashed bytes still count toward your quota until you purge.`}
+        actions={
+          <Button variant="secondary" onClick={() => void load()}>
+            <RefreshCw size={14} /> Refresh
+          </Button>
+        }
+      />
 
-      <div className="bg-amber-500/10 border border-amber-500/40 rounded p-3 flex gap-3">
-        <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
-        <div className="text-xs text-amber-200/90 space-y-1">
-          <p>
-            Deleted objects sit here until you restore them or empty the trash.
-            <span className="text-amber-300/80"> Their bytes still count toward your quota.</span>
-          </p>
-          <p className="text-amber-300/70">
-            Tip: hold <kbd className="px-1 py-0.5 bg-amber-950/40 rounded text-[10px]">Shift</kbd>
-            {" "}while clicking <em>Delete</em> in the bucket view to skip the trash entirely
-            (uses <code>?purge</code>). UI hook for that lands in a follow-up.
-          </p>
+      <Card className="mb-6 bg-warning/5 border-warning/30">
+        <div className="flex gap-3">
+          <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
+          <div className="text-xs text-text-soft space-y-1.5 leading-relaxed">
+            <p>Deleted objects sit here until you restore them or empty the trash.</p>
+            <p className="text-muted">
+              Tip: hold <kbd className="px-1 py-0.5 bg-surface border border-border-subtle rounded text-[10px] font-mono">Shift</kbd>
+              {" "}while clicking <em>Delete</em> in a bucket to skip the trash entirely.
+            </p>
+          </div>
         </div>
-      </div>
+      </Card>
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">

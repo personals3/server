@@ -5,6 +5,8 @@ import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section";
 import { Trash2, Copy, Check } from "lucide-react";
 import { formatDate } from "@/lib/format";
 
@@ -34,11 +36,15 @@ export default function KeysPage() {
   useEffect(load, []);
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Credentials</h1>
-
-      <BearerKeysSection keys={keys} reload={load} />
-      <S3CredsSection creds={s3Creds} reload={load} />
+    <div>
+      <PageHeader
+        title="Credentials"
+        description="API keys for scripts, services, and S3-compatible clients (boto3, aws-cli, rclone)."
+      />
+      <div className="space-y-6">
+        <BearerKeysSection keys={keys} reload={load} />
+        <S3CredsSection creds={s3Creds} reload={load} />
+      </div>
     </div>
   );
 }
@@ -70,12 +76,10 @@ function BearerKeysSection({ keys, reload }: { keys: KeyDTO[]; reload: () => voi
 
   return (
     <Card>
-      <h2 className="text-lg font-semibold mb-1">Bearer API Keys</h2>
-      <p className="text-xs text-muted mb-4">
-        Use with <code className="font-mono">Authorization: Bearer psk_...</code> headers
-        — recommended for our native API and scripts.
-      </p>
-
+      <SectionHeader
+        title="Bearer API Keys"
+        description={<>Use with <code className="font-mono text-text">Authorization: Bearer psk_...</code> headers.</>}
+      />
       <form onSubmit={create} className="flex flex-wrap gap-2">
         <Input value={newName} onChange={(e) => setNewName(e.target.value)}
                placeholder="e.g. laptop, backup-script" required />
@@ -150,11 +154,10 @@ function S3CredsSection({ creds, reload }: { creds: S3CredDTO[]; reload: () => v
 
   return (
     <Card>
-      <h2 className="text-lg font-semibold mb-1">S3 Credentials (AWS SigV4)</h2>
-      <p className="text-xs text-muted mb-4">
-        Use with AWS CLI / boto3 / aws-sdk-* when you need S3 compatibility.
-        Configure with: <code className="font-mono">aws --endpoint-url=&lt;your-url&gt;/api s3 ...</code>
-      </p>
+      <SectionHeader
+        title="S3 Credentials (AWS SigV4)"
+        description={<>For AWS CLI / boto3 / aws-sdk-*. Configure with <code className="font-mono text-text">aws --endpoint-url=&lt;your-url&gt;/api s3 ...</code></>}
+      />
 
       <form onSubmit={create} className="flex flex-wrap gap-2">
         <Input value={newName} onChange={(e) => setNewName(e.target.value)}

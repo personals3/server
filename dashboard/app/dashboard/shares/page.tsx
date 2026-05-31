@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   RefreshCw, Link2, X, Clock, ArrowDown, ArrowUp,
   AlertTriangle, CheckCircle2, ArrowUpFromLine,
@@ -99,38 +101,42 @@ export default function SharesPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold inline-flex items-center gap-2">
-          <Link2 size={20} /> Share links
-        </h1>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted inline-flex items-center gap-1">
-            <input type="checkbox"
-                   checked={showInactive}
-                   onChange={(e) => setShowInactive(e.target.checked)} />
-            Show expired/revoked
-          </label>
-          <Button variant="ghost" onClick={() => void load()}>
-            <RefreshCw size={14} className="mr-1" /> Refresh
-          </Button>
-          {shares.some((s) => s.active) && (
-            <Button onClick={revokeAll} className="bg-danger hover:bg-red-600">
-              Revoke all
+    <div>
+      <PageHeader
+        title="Share links"
+        description="Time-limited public URLs to specific files. They work without a login and expire automatically."
+        actions={
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-text-soft inline-flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={showInactive}
+                     onChange={(e) => setShowInactive(e.target.checked)}
+                     className="accent-text" />
+              Show expired/revoked
+            </label>
+            <Button variant="secondary" onClick={() => void load()}>
+              <RefreshCw size={14} /> Refresh
             </Button>
-          )}
-        </div>
-      </div>
+            {shares.some((s) => s.active) && (
+              <Button variant="danger" onClick={revokeAll}>Revoke all</Button>
+            )}
+          </div>
+        }
+      />
 
-      {err && <p className="text-sm text-danger">{err}</p>}
+      {err && (
+        <div className="mb-4 text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
+      )}
 
       <Card>
         {busy && shares.length === 0 ? (
           <p className="text-sm text-muted">Loading...</p>
         ) : shares.length === 0 ? (
-          <p className="text-sm text-muted">
-            {showInactive ? "No share links yet." : "No active share links."}
-          </p>
+          <EmptyState
+            compact
+            icon={<Link2 size={18} />}
+            title={showInactive ? "No share links yet" : "No active share links"}
+            description="Create a share link from any file's preview panel to share it without giving someone an account."
+          />
         ) : (
           <div className="space-y-2">
             {shares.map((s) => (

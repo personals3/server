@@ -6,6 +6,8 @@ import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section";
 import { Shield, ShieldCheck, KeyRound, AlertTriangle, Copy, Check } from "lucide-react";
 import { useToast } from "@/components/toast";
 
@@ -129,31 +131,34 @@ export default function SecurityPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-bold inline-flex items-center gap-2">
-        <Shield size={20} /> Security
-      </h1>
+    <div className="max-w-2xl">
+      <PageHeader
+        title="Security"
+        description="Protect your account with two-factor authentication, manage trusted devices, and change your password."
+      />
 
+      <div className="space-y-6">
       <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold inline-flex items-center gap-2">
-              {enabled ? <ShieldCheck size={16} className="text-green-400" /> : <Shield size={16} className="text-muted" />}
-              Two-factor authentication (TOTP)
-            </h2>
-            <p className="text-xs text-muted mt-1">
+        <SectionHeader
+          title={
+            <span className="inline-flex items-center gap-2">
               {enabled
-                ? "Enabled. You'll need a code from your authenticator app on every login."
-                : "Disabled. A single password is the only thing protecting your account."}
-            </p>
-          </div>
-          {!enabled && !setupData && (
-            <Button onClick={startSetup} disabled={busy}>
-              Set up 2FA
-            </Button>
-          )}
-        </div>
-
+                ? <ShieldCheck size={14} className="text-success" />
+                : <Shield size={14} className="text-muted" />}
+              Two-factor authentication (TOTP)
+            </span>
+          }
+          description={
+            enabled
+              ? "Enabled. You'll need a code from your authenticator app on every login."
+              : "Disabled. A single password is the only thing protecting your account."
+          }
+          actions={
+            !enabled && !setupData ? (
+              <Button onClick={startSetup} disabled={busy}>Set up 2FA</Button>
+            ) : null
+          }
+        />
         {setupData && !enabled && (
           <div className="mt-4 space-y-4 border-t border-border pt-4">
             <div>
@@ -287,6 +292,7 @@ export default function SecurityPage() {
 
       <TrustedDevicesCard />
       <DangerZoneCard />
+      </div>
     </div>
   );
 }

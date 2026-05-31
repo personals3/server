@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   Search as SearchIcon, RefreshCw, Database, FileVideo, FileAudio,
   FileImage, FileText, ChevronLeft, ChevronRight, X,
@@ -122,10 +123,11 @@ export default function SearchPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold inline-flex items-center gap-2">
-        <SearchIcon size={20} /> Search
-      </h1>
+    <div>
+      <PageHeader
+        title="Search"
+        description="Find files across all your buckets by name, type, or size. Trash and versioned copies are excluded."
+      />
 
       <Card>
         <form onSubmit={submit} className="space-y-3">
