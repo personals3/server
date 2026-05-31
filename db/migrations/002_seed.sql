@@ -12,19 +12,21 @@
 
 DO $$
 DECLARE
-  email TEXT := NULLIF(current_setting('app.admin_email', true), '');
-  pw    TEXT := NULLIF(current_setting('app.admin_password', true), '');
+  -- v_ prefix so the local doesn't shadow users.email / users.password_hash
+  -- when PostgreSQL resolves identifiers in INSERT/ON CONFLICT.
+  v_email TEXT := NULLIF(current_setting('app.admin_email', true), '');
+  v_pw    TEXT := NULLIF(current_setting('app.admin_password', true), '');
 BEGIN
-  IF email IS NULL OR pw IS NULL THEN
+  IF v_email IS NULL OR v_pw IS NULL THEN
     RAISE NOTICE 'seed: ADMIN_EMAIL/ADMIN_PASSWORD not set, skipping admin bootstrap';
     RETURN;
   END IF;
 
   INSERT INTO users (email, name, password_hash, role, quota_bytes)
   VALUES (
-    email,
+    v_email,
     'Administrator',
-    crypt(pw, gen_salt('bf', 10)),
+    crypt(v_pw, gen_salt('bf', 10)),
     'admin',
     1099511627776  -- 1 TB
   )
