@@ -588,6 +588,16 @@ interface ObjectInfo {
       rungs?: number;
       reason: string;
     };
+    // Populated when transcode_status is skipped_duration_limit or
+    // skipped_height_limit — the source exceeded the per-user transcode cap.
+    transcodeLimit?: {
+      reason: "skipped_duration_limit" | "skipped_height_limit";
+      sourceDurationSec?: number;
+      maxDurationSec?: number;
+      sourceHeight?: number;
+      maxHeight?: number;
+      durationSec?: number;
+    };
   } | null;
   transcodeStatus: string;
   pipeline?: PipelineJob[];
@@ -949,6 +959,66 @@ function PipelineProgress({ info }: { info: ObjectInfo | null }) {
       Transcoding failed — only original download is available.
     </div>;
   }
+  if (info.transcodeStatus === "skipped_duration_limit" || info.transcodeStatus === "skipped_height_limit") {
+    const t = info.transcoded?.transcodeLimit;
+    const isDuration = info.transcodeStatus === "skipped_duration_limit";
+    const headline = isDuration
+      ? "Transcoding skipped — video is over the duration limit."
+      : "Transcoding skipped — source is taller than your allowed quality.";
+    const body = isDuration
+      ? "Long videos take a lot of CPU to transcode. The original file is fully usable — you can download it, you just can't stream it as HLS without admin approval."
+      : "Your account is currently capped at a max output resolution. The original file is fully usable; only the streaming variants weren't generated.";
+    // Pre-filled mailto so users have a real path to ask without a new
+    // API endpoint. Phase-2 will replace this with a self-serve form.
+    const subject = encodeURIComponent("Request: transcoding access for a larger video");
+    const bodyText = encodeURIComponent(
+      `Hi,\n\nI'd like to request transcoding access for a video that exceeded the current limit.\n\n` +
+      `Reason: ${info.transcodeStatus}\n` +
+      (t?.sourceDurationSec ? `Source duration: ${Math.round(t.sourceDurationSec / 60)} min\n` : "") +
+      (t?.maxDurationSec ? `Current duration cap: ${Math.round(t.maxDurationSec / 60)} min\n` : "") +
+      (t?.sourceHeight ? `Source height: ${t.sourceHeight}p\n` : "") +
+      (t?.maxHeight ? `Current height cap: ${t.maxHeight}p\n` : "") +
+      `\nFile: (please attach details)\n\nThanks!`
+    );
+    return <div className="bg-bg p-4 rounded text-sm text-warning text-center space-y-3">
+      <div className="font-semibold">{headline}</div>
+      <div className="text-xs text-muted">{body}</div>
+      {t && (
+        <div className="text-[11px] text-muted bg-card border border-border rounded p-2 grid grid-cols-2 gap-x-4 gap-y-0.5 max-w-md mx-auto text-left">
+          {isDuration ? (
+            <>
+              <span>Your video</span>
+              <span className="text-text text-right font-mono">
+                {t.sourceDurationSec ? `${Math.round(t.sourceDurationSec / 60)} min` : "?"}
+              </span>
+              <span>Current limit</span>
+              <span className="text-danger text-right font-mono">
+                {t.maxDurationSec ? `${Math.round(t.maxDurationSec / 60)} min` : "?"}
+              </span>
+            </>
+          ) : (
+            <>
+              <span>Your video</span>
+              <span className="text-text text-right font-mono">
+                {t.sourceHeight ? `${t.sourceHeight}p` : "?"}
+              </span>
+              <span>Max allowed quality</span>
+              <span className="text-danger text-right font-mono">
+                {t.maxHeight ? `${t.maxHeight}p` : "?"}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      <a
+        href={`mailto:support@personals3.tech?subject=${subject}&body=${bodyText}`}
+        className="inline-block text-xs px-3 py-1.5 rounded-md bg-accent text-bg font-semibold hover:opacity-90"
+      >
+        Request transcoding access from admin
+      </a>
+    </div>;
+  }
+
   if (info.transcodeStatus === "skipped_quota" || info.transcodeStatus === "failed_quota") {
     const q = info.transcoded?.quota;
     const skipped = info.transcodeStatus === "skipped_quota";
