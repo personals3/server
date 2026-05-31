@@ -13,10 +13,11 @@ cloudflared/*.json     # tunnel credentials
 ~/.aws/                # in case anyone runs from $HOME accidentally
 
 # =============================================================================
-# User data
+# User data — leading slash anchors to repo root so this only matches the
+# top-level bind-mount dir, NOT `api/internal/storage/` (the Go package).
 # =============================================================================
-storage/
-!storage/.gitkeep
+/storage/
+!/storage/.gitkeep
 
 # =============================================================================
 # Go
@@ -62,6 +63,11 @@ logs/
 # =============================================================================
 /tmp/
 *.local
+
+# =============================================================================
+# Local backup outputs (postgres dumps, storage tarballs) — never in git
+# =============================================================================
+/backups/
 
 # =============================================================================
 # CLI lives in its own repo (github.com/personals3/cli) — exclude from server
