@@ -48,7 +48,7 @@ export default function OverviewPage() {
           </>
         }
         actions={
-          <Link href="/dashboard/buckets">
+          <Link href="/dashboard/buckets?create=1">
             <Button variant="primary">
               <FolderPlus size={14} />
               New bucket
@@ -95,7 +95,7 @@ export default function OverviewPage() {
               title="No buckets yet"
               description="Buckets are isolated containers for your files. Create one to start uploading."
               action={
-                <Link href="/dashboard/buckets">
+                <Link href="/dashboard/buckets?create=1">
                   <Button><FolderPlus size={14} />Create your first bucket</Button>
                 </Link>
               }
@@ -127,7 +127,7 @@ export default function OverviewPage() {
                 </Card>
               </Link>
             ))}
-            <Link href="/dashboard/buckets" className="group">
+            <Link href="/dashboard/buckets?create=1" className="group">
               <Card className="h-full border-dashed hover:border-text/40 transition-colors flex items-center justify-center">
                 <div className="flex items-center gap-2 text-sm text-muted group-hover:text-text transition-colors">
                   <FolderPlus size={16} />

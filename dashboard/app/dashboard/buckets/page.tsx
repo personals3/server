@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -33,9 +34,22 @@ const PURPOSE_LABEL: Record<AutoMode, { label: string; Icon: typeof Database }> 
   media:        { label: "Media library", Icon: Film },
 };
 
+// Next 15 requires useSearchParams() be inside a Suspense boundary for the
+// static export. Wrap the inner body so build doesn't error out.
 export default function BucketsPage() {
+  return (
+    <Suspense fallback={<div className="text-muted text-sm">Loading...</div>}>
+      <BucketsPageInner />
+    </Suspense>
+  );
+}
+
+function BucketsPageInner() {
+  const searchParams = useSearchParams();
+  // ?create=1 from the dashboard home auto-opens the create form so the
+  // "New bucket" buttons keep their promise instead of just navigating here.
   const [buckets, setBuckets] = useState<Bucket[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(searchParams.get("create") === "1");
 
   const load = () => api<{ buckets: Bucket[] }>("/").then((r) => setBuckets(r.buckets));
   useEffect(() => { void load(); }, []);
