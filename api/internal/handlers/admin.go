@@ -729,6 +729,23 @@ func (h *AdminHandler) UpdateSystemConfig(w http.ResponseWriter, r *http.Request
 				"must be a percentage 1-100")
 			return
 		}
+	case sysconfig.KeyDefaultMaxTranscodeDurationSeconds:
+		// Seconds. 0 = unlimited. Upper bound 24h to catch fat-fingered values.
+		n, err := strconv.ParseInt(req.Value, 10, 64)
+		if err != nil || n < 0 || n > 86400 {
+			httpx.WriteError(w, http.StatusBadRequest, "BAD_VALUE",
+				"must be a non-negative integer ≤ 86400 (24h). 0 = unlimited")
+			return
+		}
+	case sysconfig.KeyDefaultMaxTranscodeHeight:
+		// Pixels. 0 = unlimited. Upper bound 8K-ish so admins can't accidentally
+		// set 100000 and think it means something.
+		n, err := strconv.ParseInt(req.Value, 10, 64)
+		if err != nil || n < 0 || n > 4320 {
+			httpx.WriteError(w, http.StatusBadRequest, "BAD_VALUE",
+				"must be a non-negative integer ≤ 4320 (8K). 0 = unlimited")
+			return
+		}
 	default:
 		httpx.WriteError(w, http.StatusBadRequest, "UNKNOWN_KEY",
 			"unknown config key: "+key)

@@ -31,6 +31,17 @@ const (
 	//     quotas) may consume. overcommit_allowed bypasses.
 	KeyMaxUsers          = "max_users"           // int64 (0 = unlimited)
 	KeyMaxAllocationPct  = "max_allocation_pct"  // int64 1-100
+
+	// Transcode limits — default ceilings; users can have per-row overrides
+	// stored in users.max_transcode_* (NULL on the user = use system default).
+	//   default_max_transcode_duration_seconds:
+	//     sources longer than this skip the HLS pipeline entirely.
+	//     0 = unlimited (no duration gate).
+	//   default_max_transcode_height:
+	//     ladder rungs taller than this are silently dropped from the ladder.
+	//     0 = unlimited (full canonical ladder).
+	KeyDefaultMaxTranscodeDurationSeconds = "default_max_transcode_duration_seconds" // int64 seconds
+	KeyDefaultMaxTranscodeHeight          = "default_max_transcode_height"           // int64 pixels
 )
 
 type Entry struct {

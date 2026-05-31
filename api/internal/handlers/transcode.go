@@ -22,7 +22,38 @@ import (
 	"github.com/personals3/api/internal/httpx"
 	"github.com/personals3/api/internal/middleware"
 	"github.com/personals3/api/internal/storage"
+	"github.com/personals3/api/internal/sysconfig"
 )
+
+// ----------------- per-user transcode limits ------------------------------
+//
+// Effective limit = COALESCE(users.max_*, system_config.default_*). NULL on
+// the user means "use system default", NOT "unlimited" — that's `0`. The
+// resolution lives in SQL so we don't multi-trip the DB for every upload.
+
+// transcodeLimits returns the resolved (durationSec, height) caps for the
+// owner of `bucketID`. 0 in either slot means "unlimited".
+func transcodeLimits(ctx context.Context, db *pgxpool.Pool, bucketID uuid.UUID) (int64, int64) {
+	defaultDur := sysconfig.GetInt64(ctx, db, sysconfig.KeyDefaultMaxTranscodeDurationSeconds, 1800)
+	defaultH := sysconfig.GetInt64(ctx, db, sysconfig.KeyDefaultMaxTranscodeHeight, 1080)
+
+	var userDur, userH *int64
+	_ = db.QueryRow(ctx, `
+		SELECT u.max_transcode_duration_seconds, u.max_transcode_height
+		  FROM users u JOIN buckets b ON b.owner_id = u.id
+		 WHERE b.id = $1`, bucketID,
+	).Scan(&userDur, &userH)
+
+	dur := defaultDur
+	if userDur != nil {
+		dur = *userDur
+	}
+	h := defaultH
+	if userH != nil {
+		h = *userH
+	}
+	return dur, h
+}
 
 // ---------------- file-type detection -------------------------------------
 
@@ -352,6 +383,60 @@ func insertVideoPipeline(
 
 	srcHeight, durationSec := probeVideoMeta(inputPath)
 	ladder := PickLadder(srcHeight)
+
+	// ---- Per-user transcode limits ---------------------------------------
+	// Duration gate: if the source is longer than the user's effective cap,
+	// skip the whole pipeline. Object stays downloadable as raw bytes, just
+	// no HLS. Cheap early-exit before we burn quota or enqueue jobs.
+	maxDur, maxHeight := transcodeLimits(ctx, db, bucketID)
+	if maxDur > 0 && durationSec > float64(maxDur) {
+		detail, _ := json.Marshal(map[string]any{
+			"transcodeLimit": map[string]any{
+				"reason":             "skipped_duration_limit",
+				"sourceDurationSec":  durationSec,
+				"maxDurationSec":     maxDur,
+				"sourceHeight":       srcHeight,
+			},
+		})
+		_, _ = db.Exec(ctx, `
+			UPDATE objects SET transcode_status='skipped_duration_limit',
+			                   transcoded = $1::jsonb,
+			                   updated_at = now()
+			 WHERE id = $2`, string(detail), objectID)
+		return false
+	}
+
+	// Height gate: filter the ladder to rungs ≤ user's cap. The object still
+	// transcodes; it just gets fewer rungs. Worker doesn't need to know
+	// about the limit — it just receives a shorter ladder.
+	if maxHeight > 0 {
+		filtered := ladder[:0]
+		for _, r := range ladder {
+			if int64(r.Height) <= maxHeight {
+				filtered = append(filtered, r)
+			}
+		}
+		ladder = filtered
+		if len(ladder) == 0 {
+			// Source is taller than every allowed rung AND we filtered them
+			// all out. This is a corner case (e.g. maxHeight=240 on a 4K
+			// source) — surface a clear status rather than an empty pipeline.
+			detail, _ := json.Marshal(map[string]any{
+				"transcodeLimit": map[string]any{
+					"reason":         "skipped_height_limit",
+					"sourceHeight":   srcHeight,
+					"maxHeight":      maxHeight,
+					"durationSec":    durationSec,
+				},
+			})
+			_, _ = db.Exec(ctx, `
+				UPDATE objects SET transcode_status='skipped_height_limit',
+				                   transcoded = $1::jsonb,
+				                   updated_at = now()
+				 WHERE id = $2`, string(detail), objectID)
+			return false
+		}
+	}
 
 	// Pre-flight quota estimate + ATOMIC RESERVATION.
 	//
