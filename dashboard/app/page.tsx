@@ -136,15 +136,15 @@ export default function HomePage() {
 
           <div className="mt-12 bg-codeBg border border-border rounded-lg p-4 sm:p-5 max-w-2xl font-mono text-sm overflow-x-auto">
             <p className="text-muted text-[11px] mb-2">Example: upload a file</p>
-            <pre className="text-text whitespace-pre-wrap"># Dashboard: drag onto the bucket page
+            <pre className="text-text whitespace-pre-wrap">{`# Dashboard: drag onto the bucket page
 
 # CLI
 ps3 cp ./photo.jpg my-bucket/photos/photo.jpg
 
 # HTTP
-curl -X PUT https://your-instance.example/api/my-bucket/photo.jpg \
-  -H {'"'}Authorization: Bearer $TOKEN{'"'} \
-  --data-binary @./photo.jpg</pre>
+curl -X PUT https://personals3.tech/api/my-bucket/photo.jpg \\
+  -H "Authorization: Bearer $TOKEN" \\
+  --data-binary @./photo.jpg`}</pre>
           </div>
         </div>
       </section>
