@@ -56,7 +56,10 @@ worker/*.egg-info/
 .DS_Store
 Thumbs.db
 *.log
-logs/
+# Anchored — was matching dashboard/app/dashboard/admin/logs/ (the admin
+# logs page directory) and silently excluding it from git. Same class of
+# bug we already fixed for /storage/ and cli's /ps3.
+/logs/
 
 # =============================================================================
 # Local-only helpers
