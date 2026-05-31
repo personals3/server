@@ -3,7 +3,9 @@
 # =============================================================================
 .env
 .env.*
-!.env.example          # the template stays in git
+# Template stays in git — keep its negation on its own line; gitignore
+# treats inline `#` as part of the pattern, not as a comment.
+!.env.example
 *.pem
 *.key
 *.pfx
