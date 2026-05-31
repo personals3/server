@@ -12,11 +12,16 @@ sudo usermod -aG docker $USER
 # log out + back in (or `newgrp docker`)
 
 # 2. Clone
-git clone https://github.com/YOUR_USERNAME/S3orSimilar.git
-cd S3orSimilar
+git clone https://github.com/personals3/server.git
+cd server
 
 # 3. Generate fresh secrets and admin credentials
 ./scripts/init-secrets.sh
+# Then open .env and set the values that init-secrets DOESN'T touch:
+#   ADMIN_EMAIL / ADMIN_PASSWORD  — your first admin login
+#   SMTP_*                        — your transactional email provider
+#   PUBLIC_BASE_URL               — your public URL once the tunnel is up
+#   STORAGE_ROOT                  — absolute path to the data disk
 
 # 4. Start the stack
 docker compose up -d --build
@@ -27,23 +32,36 @@ curl http://localhost:8080/nginx-health       # → "ok"
 curl http://localhost:8080/api/healthz        # → "ok"
 
 # 6. Open http://localhost:8080 (or via your reverse proxy) and log in
-#    with the credentials init-secrets printed.
+#    with the ADMIN_EMAIL / ADMIN_PASSWORD you set in .env.
 ```
 
-## Adding a Cloudflare Tunnel hostname
+## Cloudflare Tunnel (recommended)
 
-In Cloudflare Zero Trust → Networks → Tunnels → your tunnel → **Public Hostname** → **Add**:
+The tunnel binds your local stack to a public domain without opening ports or
+running a separate reverse proxy. From the same machine as the stack:
 
-| Field | Value |
-|---|---|
-| Subdomain | `s3` (or whatever) |
-| Domain | yourdomain.com |
-| Service type | `HTTP` |
-| Service URL | `localhost:8080` (or `nginx:80` if cloudflared runs in our compose) |
+```bash
+# One-time auth (opens browser)
+cloudflared tunnel login
 
-Save → open `https://s3.yourdomain.com` from anywhere.
+# Create a named tunnel + credentials file (writes ~/.cloudflared/<UUID>.json)
+cloudflared tunnel create personals3
 
-See [cloudflare-tunnel.md](./cloudflare-tunnel.md) for the full guide.
+# Add a DNS record in Cloudflare pointing your domain at this tunnel
+cloudflared tunnel route dns personals3 personals3.tech
+
+# Put the tunnel ID into .env so the compose service picks it up
+echo "CLOUDFLARED_TOKEN=<token-from-zero-trust-dashboard>" >> .env
+
+# Start the tunnel profile (alongside the rest of the stack)
+docker compose --profile tunnel up -d
+```
+
+Then set `PUBLIC_BASE_URL=https://personals3.tech` in `.env` and
+`docker compose up -d` to pick it up.
+
+See [cloudflare-tunnel.md](./cloudflare-tunnel.md) for the full guide,
+including the "Mode B — Named tunnel" docker-compose service.
 
 ## Pre-flight checklist (do these BEFORE making it public)
 
@@ -60,7 +78,7 @@ See [cloudflare-tunnel.md](./cloudflare-tunnel.md) for the full guide.
 ## Upgrading
 
 ```bash
-cd S3orSimilar
+cd server
 git pull
 docker compose down              # stops services, KEEPS DATA
 docker compose up -d --build     # rebuilds images, picks up code changes
@@ -92,8 +110,8 @@ Schedule both as a nightly cron. To restore: stop the stack, restore both, start
 ## What `init-secrets.sh` doesn't do
 
 - **TLS certs** — Cloudflare provides them for tunneled hostnames automatically.
-  If you're skipping Cloudflare and exposing nginx directly, terminate TLS with
-  another reverse proxy in front (Caddy / nginx with certbot).
+  If you're not using Cloudflare and exposing nginx directly, terminate TLS
+  with a reverse proxy in front (Caddy / nginx with certbot).
 - **Backups** — see Operations doc.
 - **Resource limits** — add `mem_limit` / `cpus` in compose if you're sharing
   the box with other workloads.
