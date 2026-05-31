@@ -1,0 +1,387 @@
+# =============================================================================
+# PersonalS3 — Docker Compose
+# Phase 1: data layer only (postgres + valkey)
+# Phases 2+ will add: api, worker, dashboard, nginx
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — metadata, quotas, audit, job queue
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: s3-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Forward to the seed migration via custom GUCs. If either is unset
+      # the seed is a no-op — no default admin account is created.
+      PGOPTIONS: "-c app.admin_email=${ADMIN_EMAIL:-} -c app.admin_password=${ADMIN_PASSWORD:-}"
+    # Bind to loopback only — Postgres should only be reached from within the
+    # docker network (api, worker). To inspect from host, use:
+    #   docker compose exec postgres psql -U s3admin -d personals3
+    # If you NEED to connect from another machine, change to "${POSTGRES_PORT}:5432".
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Auto-runs all .sql files in this dir on first startup
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Valkey — Redis-compatible cache for rate-limits, sessions, multipart state
+  # ---------------------------------------------------------------------------
+  valkey:
+    image: valkey/valkey:7-alpine
+    container_name: s3-valkey
+    restart: unless-stopped
+    command:
+      - valkey-server
+      - --requirepass
+      - ${VALKEY_PASSWORD}
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - "60 100"            # snapshot every 60s if at least 100 keys changed
+    # Loopback only — same reasoning as postgres.
+    ports:
+      - "127.0.0.1:${VALKEY_PORT}:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # API Server (Go) — buckets, objects, multipart
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: s3-api
+    restart: unless-stopped
+    # Run as host user so files written to bind-mounted STORAGE_ROOT
+    # are owned correctly (not by container's internal UID 10001).
+    user: "${UID:-1000}:${GID:-1000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      STORAGE_ROOT: /storage
+      DEFAULT_QUOTA_BYTES: ${DEFAULT_QUOTA_BYTES}
+      MULTIPART_CHUNK_SIZE: ${MULTIPART_CHUNK_SIZE}
+      # Set DEBUG_SIGV4=1 in your shell ONLY when actively debugging an
+      # aws-cli/boto3/rclone signature mismatch — leaves canonical request
+      # info in API logs. Off by default.
+      DEBUG_SIGV4: ${DEBUG_SIGV4:-}
+      # Email — when SMTP_HOST is empty, the API falls back to writing
+      # .eml files under storage/.email-outbox/ instead of sending. See
+      # the .env file for provider-specific setup notes.
+      SMTP_HOST:      ${SMTP_HOST:-}
+      SMTP_PORT:      ${SMTP_PORT:-587}
+      SMTP_USER:      ${SMTP_USER:-}
+      SMTP_PASS:      ${SMTP_PASS:-}
+      SMTP_FROM:      ${SMTP_FROM:-no-reply@personals3.local}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-PersonalS3}
+      SMTP_REPLY_TO:  ${SMTP_REPLY_TO:-}
+      SMTP_TLS:       ${SMTP_TLS:-1}
+      ADMIN_EMAIL:    ${ADMIN_EMAIL:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+    # No host port binding — only reachable via nginx at /api/*.
+    # Reaching the API directly bypasses nginx's path routing (/api/login etc.)
+    # and would hit raw routes like /auth/login which has different paths.
+    # If you really need direct access for debugging, run:
+    #   docker compose exec api wget -qO- http://localhost:3000/healthz
+    expose:
+      - "3000"
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+      # In-app docs viewer reads from /app/docs. Read-only bind so the API
+      # can serve doc content but never edit it.
+      - ./docs:/app/docs:ro
+    healthcheck:
+      # wget --spider sends HEAD which chi doesn't auto-route from a GET handler;
+      # use -O- to force GET and discard the body.
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Dashboard (Next.js) — login UI, bucket browser, upload, media player
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: s3-dashboard
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # Same-origin API calls — nginx routes /api/* to the backend.
+      # Override in .env if you front the dashboard with a different host
+      # (e.g. dash.yourdomain.com calling api.yourdomain.com).
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+      NODE_ENV: production
+      # Next.js standalone server reads these — without them it binds to
+      # localhost:3000 inside the container, unreachable from the host.
+      PORT: "3001"
+      HOSTNAME: "0.0.0.0"
+    # No host port binding — only reachable via nginx at /.
+    # The dashboard's API calls use the relative path /api/* and rely on
+    # nginx routing. Hitting Next.js directly causes those calls to 404
+    # against Next's own router.
+    expose:
+      - "3001"
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Nginx — reverse proxy + static HLS/image serving (sendfile zero-copy)
+  # Routes:
+  #   /stream/{id}/...  → static from /storage/segments/{id}/...
+  #   /nginx-health     → 200 ok
+  #   everything else   → proxy to api:3000
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: s3-nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${STORAGE_ROOT}:/storage:ro
+    healthcheck:
+      # 127.0.0.1, not localhost — alpine's wget resolves localhost to ::1
+      # first, and our nginx.conf only has `listen 80;` (IPv4). Using the
+      # raw v4 address skips the resolution entirely.
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Cleaner — periodic garbage collection. Same image as the API server, just
+  # a different ENTRYPOINT. Runs the tick loop in a single goroutine on a
+  # tiny DB pool. Defaults to DRY-RUN — flip CLEANUP_DRY_RUN=0 once you've
+  # reviewed an audit log under STORAGE_ROOT/.cleanup/.
+  # ---------------------------------------------------------------------------
+  cleaner:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: s3-cleaner
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    entrypoint: ["/usr/local/bin/cleaner"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      STORAGE_ROOT: /storage
+      JWT_SECRET: ${JWT_SECRET}
+      # Tick cadence + safety
+      # V4 ticks are cheap — dirty-shard select takes ~ms when nothing changed,
+      # only the changed shards get walked. 30s tick = near-real-time integrity.
+      CLEANUP_INTERVAL:        "${CLEANUP_INTERVAL:-30s}"
+      CLEANUP_RETRY_WAIT:      "${CLEANUP_RETRY_WAIT:-60s}"
+      CLEANUP_DRY_RUN:         "${CLEANUP_DRY_RUN:-1}"      # SAFE: defaults to dry-run
+      MAX_REAPS_PER_TICK:      "${MAX_REAPS_PER_TICK:-10000}"
+      # Retention windows
+      TRASH_RETENTION_DAYS:    "${TRASH_RETENTION_DAYS:-30}"
+      MULTIPART_EXPIRY_DAYS:   "${MULTIPART_EXPIRY_DAYS:-7}"
+      STUCK_TRANSCODE_MINUTES: "${STUCK_TRANSCODE_MINUTES:-120}"
+      IMPORT_STUCK_HOURS:      "${IMPORT_STUCK_HOURS:-6}"
+      # Orphan scan + bloom
+      ORPHAN_SCAN_INTERVAL:    "${ORPHAN_SCAN_INTERVAL:-24h}"
+      ORPHAN_MIN_AGE_MINUTES:  "${ORPHAN_MIN_AGE_MINUTES:-30}"
+      BLOOM_REBUILD_INTERVAL:  "${BLOOM_REBUILD_INTERVAL:-6h}"
+      ORPHAN_TWO_STRIKE:       "${ORPHAN_TWO_STRIKE:-1}"
+      # fsnotify watcher — marks shards dirty within ~ms of any disk write
+      # so bot-dropped orphans get reaped in <60s instead of waiting for the
+      # 24h bloom scan. Set to 0 on networked storage (NFS, etc) where
+      # inotify isn't supported.
+      WATCH_DISK:              "${WATCH_DISK:-1}"
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Worker (Python + FFmpeg) — transcodes uploaded media to HLS/WebP/etc.
+  # Scale with: docker compose up -d --scale worker=4
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: s3-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      api:
+        condition: service_started
+    user: "${UID:-1000}:${GID:-1000}"
+    # Pass the host GPU through so the worker can use VA-API hardware encoding.
+    # /dev/dri exists on most Linux hosts (Intel iGPU, AMD APU, NVIDIA, etc).
+    # The default GIDs cover Debian/Ubuntu; override with VIDEO_GID/RENDER_GID
+    # in .env if your distro differs (`getent group video render`).
+    # If /dev/dri doesn't exist on your host, comment these — worker falls
+    # back to CPU encoding automatically.
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-993}"
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Used by the cancel-on-delete subscriber so the worker can instantly
+      # SIGTERM ffmpeg when the API tells us the object has been deleted/replaced.
+      VALKEY_URL: redis://:${VALKEY_PASSWORD}@valkey:6379/0
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL}
+      LOG_LEVEL: INFO
+      USE_GPU: "${USE_GPU:-1}"                       # set to 0 to force CPU encoding
+      FFMPEG_THREADS: "${FFMPEG_THREADS:-4}"          # cap per-process threads
+      # Number of worker threads inside this container. Each thread polls the
+      # DB independently and runs its own ffmpeg subprocess in parallel, so a
+      # single container processes WORKER_CONCURRENCY jobs at once.
+      # Recommended: ~ (cores / FFMPEG_THREADS) for CPU encoding; 4-8 for GPU
+      # since the iGPU handles many concurrent VAAPI sessions cheaply.
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-4}"
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Caddy — alternative reverse proxy with AUTOMATIC HTTPS. Opt-in via
+  # --profile caddy. Use this OR nginx OR cloudflared, not multiple at once.
+  #
+  # Set CADDY_DOMAIN in .env to your real domain (must point at this host
+  # for Let's Encrypt). Use CADDY_DOMAIN=localhost for local testing with
+  # Caddy's internal CA (browser shows "not secure" warning).
+  #
+  # Stop nginx first:  docker compose stop nginx
+  # Bring Caddy up:    docker compose --profile caddy up -d caddy
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: s3-caddy
+    restart: unless-stopped
+    profiles: ["caddy"]
+    depends_on:
+      api:
+        condition: service_started
+      dashboard:
+        condition: service_started
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    environment:
+      CADDY_DOMAIN: "${CADDY_DOMAIN:-localhost}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${STORAGE_ROOT}:/storage:ro
+      - caddy_data:/data         # cert storage (persists across restarts!)
+      - caddy_config:/config
+    networks:
+      - s3-net
+
+  # ---------------------------------------------------------------------------
+  # Cloudflare Tunnel — global access without port forwarding (Part 9)
+  # Two opt-in modes via Docker Compose profiles. Neither starts by default.
+  # ---------------------------------------------------------------------------
+  #
+  # MODE A — Quick tunnel (no account, no domain, random URL):
+  #   docker compose --profile quick-tunnel up -d cloudflared-quick
+  #   docker compose logs cloudflared-quick   # ← get your https://*.trycloudflare.com URL
+  #
+  # The URL changes every container restart. Good for testing only.
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    container_name: s3-cloudflared-quick
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://nginx:80
+    profiles: ["quick-tunnel"]
+    depends_on:
+      nginx:
+        condition: service_started
+    networks:
+      - s3-net
+
+  # MODE B — Named tunnel with your own domain (s3.yourdomain.com).
+  # Requires:
+  #   1. A Cloudflare account (free)
+  #   2. A domain whose nameservers point to Cloudflare
+  #   3. A tunnel token from Zero Trust → Networks → Tunnels → Create Tunnel
+  #      Paste the token into .env as CLOUDFLARED_TOKEN=eyJ...
+  #
+  #   docker compose --profile tunnel up -d cloudflared
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: s3-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN:-MISSING}
+    profiles: ["tunnel"]
+    depends_on:
+      nginx:
+        condition: service_started
+    networks:
+      - s3-net
+
+# Persistent volumes — survive container removal
+volumes:
+  postgres_data:
+    name: s3-postgres-data
+  valkey_data:
+    name: s3-valkey-data
+  caddy_data:        # Caddy's TLS cert store — DO NOT WIPE without backups
+    name: s3-caddy-data
+  caddy_config:
+    name: s3-caddy-config
+
+# Private network — all services talk via service names (postgres, valkey, ...)
+networks:
+  s3-net:
+    name: s3-net
+    driver: bridge

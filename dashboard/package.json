@@ -1,0 +1,31 @@
+{
+  "name": "personals3-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3001",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3001",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "15.0.3",
+    "react": "19.0.0-rc-66855b96-20241106",
+    "react-dom": "19.0.0-rc-66855b96-20241106",
+    "video.js": "8.17.4",
+    "clsx": "2.1.1",
+    "tailwind-merge": "2.5.4",
+    "lucide-react": "0.461.0",
+    "ignore": "6.0.2"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "@types/node": "22.9.0",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/video.js": "7.3.58",
+    "tailwindcss": "3.4.14",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.49"
+  }
+}
