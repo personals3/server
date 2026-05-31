@@ -5,7 +5,6 @@ import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { StorageBreakdown } from "@/components/storage-breakdown";
 import { QuotaRequestWidget } from "@/components/quota-request-widget";
-import { RecentActivity } from "@/components/recent-activity";
 import { ActiveOps } from "@/components/active-ops";
 import { Database } from "lucide-react";
 import Link from "next/link";
@@ -65,37 +64,31 @@ export default function OverviewPage() {
           Hides itself when nothing's happening. */}
       <ActiveOps />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
-          <h2 className="text-sm font-semibold mb-3">Recent operations</h2>
-          <RecentActivity />
-        </Card>
-        <Card>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold">Your buckets</h2>
-            <Link href="/dashboard/buckets" className="text-xs text-accent hover:underline">
-              Manage →
-            </Link>
-          </div>
-          {buckets.length === 0 ? (
-            <p className="text-muted text-sm">No buckets yet — go to Buckets to create one.</p>
-          ) : (
-            <ul className="space-y-2">
-              {buckets.slice(0, 6).map((b) => (
-                <li key={b.id}>
-                  <Link
-                    href={`/dashboard/buckets/${b.name}`}
-                    className="flex items-center gap-2 text-sm hover:text-accent"
-                  >
-                    <Database size={14} className="text-muted" />
-                    {b.name}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Your buckets</h2>
+          <Link href="/dashboard/buckets" className="text-xs text-accent hover:underline">
+            Manage →
+          </Link>
+        </div>
+        {buckets.length === 0 ? (
+          <p className="text-muted text-sm">No buckets yet — go to Buckets to create one.</p>
+        ) : (
+          <ul className="space-y-2">
+            {buckets.slice(0, 6).map((b) => (
+              <li key={b.id}>
+                <Link
+                  href={`/dashboard/buckets/${b.name}`}
+                  className="flex items-center gap-2 text-sm hover:text-accent"
+                >
+                  <Database size={14} className="text-muted" />
+                  {b.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   );
 }
