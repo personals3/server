@@ -429,7 +429,8 @@ type StorageBreakdown struct {
 	// reservedBytes = transcode pre-flight reservations that haven't settled
 	// to actual transcoded_bytes yet. Lives inside the per-bucket numbers
 	// too; surfaced separately so the chart can color it as "in-flight".
-	ReservedBytes int64 `json:"reservedBytes"`
+	ReservedBytes    int64 `json:"reservedBytes"`
+	TotalObjectCount int   `json:"totalObjectCount"`
 }
 
 // StorageBreakdownEntry is one bucket's slice. Bytes are split so the
@@ -442,6 +443,7 @@ type StorageBreakdownEntry struct {
 	ReservedBytes   int64  `json:"reservedBytes"`   // sum of transcode_reserved_bytes
 	TrashBytes      int64  `json:"trashBytes"`      // size+transcoded for is_deleted=true
 	TotalBytes      int64  `json:"totalBytes"`      // all of the above
+	ObjectCount     int    `json:"objectCount"`     // live (non-trashed) objects in this bucket
 	Archived        bool   `json:"archived"`
 }
 
@@ -454,7 +456,8 @@ func (h *AuthHandler) Storage(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(SUM(CASE WHEN NOT o.is_deleted THEN o.size_bytes ELSE 0 END), 0)        AS orig,
 		       COALESCE(SUM(CASE WHEN NOT o.is_deleted THEN COALESCE(o.transcoded_bytes,0) ELSE 0 END), 0) AS trb,
 		       COALESCE(SUM(COALESCE(o.transcode_reserved_bytes, 0)), 0)                       AS rsv,
-		       COALESCE(SUM(CASE WHEN o.is_deleted THEN o.size_bytes + COALESCE(o.transcoded_bytes,0) ELSE 0 END), 0) AS trsh
+		       COALESCE(SUM(CASE WHEN o.is_deleted THEN o.size_bytes + COALESCE(o.transcoded_bytes,0) ELSE 0 END), 0) AS trsh,
+		       COALESCE(SUM(CASE WHEN NOT o.is_deleted THEN 1 ELSE 0 END), 0)::int             AS obj_count
 		  FROM buckets b
 		  LEFT JOIN objects o ON o.bucket_id = b.id
 		 WHERE b.owner_id = $1
@@ -470,12 +473,14 @@ func (h *AuthHandler) Storage(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var e StorageBreakdownEntry
 		if err := rows.Scan(&e.ID, &e.Name, &e.Archived,
-			&e.OriginalBytes, &e.TranscodedBytes, &e.ReservedBytes, &e.TrashBytes); err != nil {
+			&e.OriginalBytes, &e.TranscodedBytes, &e.ReservedBytes, &e.TrashBytes,
+			&e.ObjectCount); err != nil {
 			continue
 		}
 		e.TotalBytes = e.OriginalBytes + e.TranscodedBytes + e.ReservedBytes + e.TrashBytes
 		out.TrashBytes += e.TrashBytes
 		out.ReservedBytes += e.ReservedBytes
+		out.TotalObjectCount += e.ObjectCount
 		out.Buckets = append(out.Buckets, e)
 	}
 

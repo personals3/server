@@ -835,8 +835,9 @@ func (h *ShareHandler) ServePresignedMultipartFinalize(w http.ResponseWriter, r 
 		return
 	}
 
-	// Dispatch to the existing authenticated handlers by inflating a
-	// fake context with the real owner derived from the upload row.
+	// Resolve the real owner from the upload row. The presigned signature
+	// proves authorization for this specific (bucket, key, uploadId, expiry)
+	// tuple — the owner ID below is what scopes the downstream operation.
 	var ownerID uuid.UUID
 	if err := h.DB.QueryRow(r.Context(),
 		`SELECT owner_id FROM multipart_uploads WHERE upload_id=$1 AND key=$2`,
@@ -846,13 +847,12 @@ func (h *ShareHandler) ServePresignedMultipartFinalize(w http.ResponseWriter, r 
 		return
 	}
 
-	// Inject the user into the request context for the downstream handlers.
-	user := &middleware.User{ID: ownerID}
-	r = r.WithContext(middleware.WithUser(r.Context(), user))
-
+	// Call the userID-explicit handler variants directly — no fake User
+	// injection into the request context. The downstream code uses ownerID
+	// for ownership scoping and pulls quota/role from the DB as needed.
 	if _, abort := q["abort"]; abort {
-		h.MP.Abort(w, r)
+		h.MP.AbortForUser(w, r, ownerID)
 		return
 	}
-	h.MP.Complete(w, r)
+	h.MP.CompleteForUser(w, r, ownerID)
 }

@@ -4,9 +4,9 @@
 //
 // Header strip: title + tab pills + a single live-tail indicator that
 // counts how many tabs are currently streaming.
-// Each tab gets a small toolbar (live / filters) and a single dense
-// table with hover row + colored status pills. Quota events tab is a
-// dedicated SSE stream rendered as a colored log line stream.
+// Each tab gets a small toolbar (live / filters / paging) and a single
+// dense table. Quota events tab has two modes: live SSE stream OR
+// paginated history from the quota_events table.
 
 import { useEffect, useRef, useState } from "react";
 import { api, API, getToken } from "@/lib/api";
@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   Pause, Play, Filter, FileSearch, Sparkles, FileVideo, Activity, ScrollText, Radio,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 type Tab = "audit" | "cleanup" | "transcode" | "quota-events";
@@ -24,8 +25,11 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode; description: string
   { id: "audit",        label: "API audit",  icon: <FileSearch size={13} />, description: "Every authenticated HTTP request" },
   { id: "cleanup",      label: "Cleaner",    icon: <Sparkles   size={13} />, description: "Each cleaner tick and what it reaped" },
   { id: "transcode",    label: "Transcodes", icon: <FileVideo  size={13} />, description: "Per-rung worker pipeline state" },
-  { id: "quota-events", label: "Quota",      icon: <Activity   size={13} />, description: "Live tail of every QuotaReserve call" },
+  { id: "quota-events", label: "Quota",      icon: <Activity   size={13} />, description: "Charge/refund events — live stream and full history" },
 ];
+
+const PAGE_SIZES = [50, 100, 200];
+const DEFAULT_PAGE_SIZE = 100;
 
 export default function LogsPage() {
   const [tab, setTab] = useState<Tab>("audit");
@@ -84,7 +88,7 @@ function PanelCard({ children }: { children: React.ReactNode }) {
 
 function Toolbar({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-bg/30 rounded-t-lg rounded-tl-none">
+    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-bg/30 rounded-t-lg rounded-tl-none flex-wrap">
       {children}
     </div>
   );
@@ -137,6 +141,64 @@ function transcodeVariant(s: string): "success" | "danger" | "warning" | "info" 
   return "muted";
 }
 
+// Shared pager — left/right arrows, "Page X of Y", page-size selector.
+// totalRows is what the server says; rendered rows is whatever the panel
+// scrolled in. Stays muted when there's only one page.
+function Pager({
+  total, limit, offset, onJump, onPageSize,
+}: {
+  total: number; limit: number; offset: number;
+  onJump: (newOffset: number) => void;
+  onPageSize: (sz: number) => void;
+}) {
+  const page       = Math.floor(offset / limit) + 1;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const lo         = total === 0 ? 0 : offset + 1;
+  const hi         = Math.min(offset + limit, total);
+  const prev       = () => onJump(Math.max(0, offset - limit));
+  const next       = () => onJump(offset + limit);
+  const first      = () => onJump(0);
+  const last       = () => onJump((totalPages - 1) * limit);
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-muted">
+      <span className="font-mono whitespace-nowrap">
+        {lo}–{hi} of {total.toLocaleString()}
+      </span>
+      <div className="flex items-center gap-0.5 ml-2">
+        <button
+          onClick={first} disabled={offset === 0}
+          className="px-1.5 py-1 rounded hover:bg-surface disabled:opacity-30 disabled:hover:bg-transparent"
+          title="First page"
+        >«</button>
+        <button
+          onClick={prev} disabled={offset === 0}
+          className="p-1 rounded hover:bg-surface disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Previous page"
+        ><ChevronLeft size={12} /></button>
+        <span className="px-2 font-mono whitespace-nowrap">Page {page} / {totalPages}</span>
+        <button
+          onClick={next} disabled={hi >= total}
+          className="p-1 rounded hover:bg-surface disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Next page"
+        ><ChevronRight size={12} /></button>
+        <button
+          onClick={last} disabled={page >= totalPages}
+          className="px-1.5 py-1 rounded hover:bg-surface disabled:opacity-30 disabled:hover:bg-transparent"
+          title="Last page"
+        >»</button>
+      </div>
+      <select
+        value={limit}
+        onChange={(e) => onPageSize(Number(e.target.value))}
+        className="ml-1 bg-bg border border-border rounded px-1.5 py-0.5 text-[11px]"
+        title="Rows per page"
+      >
+        {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}/page</option>)}
+      </select>
+    </div>
+  );
+}
+
 // ============================================================================
 // Audit panel
 // ============================================================================
@@ -156,22 +218,33 @@ interface AuditEntry {
 
 function AuditPanel() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [total, setTotal]   = useState(0);
   const [filter, setFilter] = useState({ user: "", action: "" });
-  const [live, setLive] = useState(true);
+  const [live, setLive]     = useState(true);
+  const [limit, setLimit]   = useState(DEFAULT_PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
 
   useEffect(() => {
     const load = () => {
       const q = new URLSearchParams();
       if (filter.user) q.set("user", filter.user);
       if (filter.action) q.set("action", filter.action);
-      q.set("limit", "200");
-      void api<{ entries: AuditEntry[] }>(`/admin/audit?${q}`).then((r) => setEntries(r.entries));
+      q.set("limit", String(limit));
+      q.set("offset", String(offset));
+      void api<{ entries: AuditEntry[]; total: number }>(`/admin/audit?${q}`).then((r) => {
+        setEntries(r.entries);
+        setTotal(r.total);
+      });
     };
     load();
     if (!live) return;
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
-  }, [filter, live]);
+  }, [filter, live, limit, offset]);
+
+  // Filter changes always reset to page 1 — otherwise the offset could
+  // exceed total and we'd show "nothing matches" on what's actually page 5.
+  useEffect(() => { setOffset(0); }, [filter, limit]);
 
   return (
     <PanelCard>
@@ -190,7 +263,10 @@ function AuditPanel() {
           onChange={(e) => setFilter({ ...filter, action: e.target.value })}
           className="h-7 text-xs w-32"
         />
-        <span className="ml-auto text-[11px] text-muted">{entries.length} rows</span>
+        <div className="ml-auto">
+          <Pager total={total} limit={limit} offset={offset}
+                 onJump={setOffset} onPageSize={setLimit} />
+        </div>
       </Toolbar>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -245,21 +321,38 @@ interface CleanupRun {
 }
 
 function CleanupPanel() {
-  const [runs, setRuns] = useState<CleanupRun[]>([]);
-  const [live, setLive] = useState(true);
+  const [runs, setRuns]     = useState<CleanupRun[]>([]);
+  const [total, setTotal]   = useState(0);
+  const [live, setLive]     = useState(true);
+  const [limit, setLimit]   = useState(DEFAULT_PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
+
   useEffect(() => {
-    const load = () => void api<{ runs: CleanupRun[] }>("/admin/cleanup?limit=50").then((r) => setRuns(r.runs));
+    const load = () => {
+      const q = new URLSearchParams();
+      q.set("limit", String(limit));
+      q.set("offset", String(offset));
+      void api<{ runs: CleanupRun[]; total: number }>(`/admin/cleanup?${q}`).then((r) => {
+        setRuns(r.runs);
+        setTotal(r.total);
+      });
+    };
     load();
     if (!live) return;
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
-  }, [live]);
+  }, [live, limit, offset]);
+
+  useEffect(() => { setOffset(0); }, [limit]);
 
   return (
     <PanelCard>
       <Toolbar>
         <LiveButton live={live} onToggle={() => setLive(!live)} />
-        <span className="ml-auto text-[11px] text-muted">{runs.length} runs</span>
+        <div className="ml-auto">
+          <Pager total={total} limit={limit} offset={offset}
+                 onJump={setOffset} onPageSize={setLimit} />
+        </div>
       </Toolbar>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -317,21 +410,31 @@ interface TranscodeJob {
 }
 
 function TranscodePanel() {
-  const [jobs, setJobs] = useState<TranscodeJob[]>([]);
+  const [jobs, setJobs]     = useState<TranscodeJob[]>([]);
+  const [total, setTotal]   = useState(0);
   const [status, setStatus] = useState("");
-  const [live, setLive] = useState(true);
+  const [live, setLive]     = useState(true);
+  const [limit, setLimit]   = useState(DEFAULT_PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
+
   useEffect(() => {
     const load = () => {
       const q = new URLSearchParams();
       if (status) q.set("status", status);
-      q.set("limit", "200");
-      void api<{ jobs: TranscodeJob[] }>(`/admin/transcode-jobs?${q}`).then((r) => setJobs(r.jobs));
+      q.set("limit", String(limit));
+      q.set("offset", String(offset));
+      void api<{ jobs: TranscodeJob[]; total: number }>(`/admin/transcode-jobs?${q}`).then((r) => {
+        setJobs(r.jobs);
+        setTotal(r.total);
+      });
     };
     load();
     if (!live) return;
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
-  }, [status, live]);
+  }, [status, live, limit, offset]);
+
+  useEffect(() => { setOffset(0); }, [status, limit]);
 
   return (
     <PanelCard>
@@ -349,7 +452,10 @@ function TranscodePanel() {
           <option value="failed">failed</option>
           <option value="skipped">skipped</option>
         </select>
-        <span className="ml-auto text-[11px] text-muted">{jobs.length} jobs</span>
+        <div className="ml-auto">
+          <Pager total={total} limit={limit} offset={offset}
+                 onJump={setOffset} onPageSize={setLimit} />
+        </div>
       </Toolbar>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -399,10 +505,12 @@ function TranscodePanel() {
 }
 
 // ============================================================================
-// Quota events SSE panel
+// Quota events — two modes:
+//   live    → SSE tail of /admin/quota-events (in-memory, drops if slow)
+//   history → paginated read of the quota_events table
 // ============================================================================
 
-interface QuotaEvent {
+interface LiveEvent {
   ts: string;
   userId: string;
   delta: number;
@@ -411,8 +519,42 @@ interface QuotaEvent {
   rejected?: boolean;
 }
 
+interface HistEvent extends LiveEvent {
+  userEmail: string;
+}
+
 function QuotaEventsPanel() {
-  const [events, setEvents] = useState<QuotaEvent[]>([]);
+  const [mode, setMode] = useState<"live" | "history">("history");
+  return (
+    <PanelCard>
+      <Toolbar>
+        <div className="inline-flex border border-border rounded overflow-hidden text-xs">
+          <button
+            onClick={() => setMode("history")}
+            className={"px-2.5 py-1 " + (mode === "history"
+              ? "bg-surface text-text font-medium"
+              : "text-muted hover:text-text")}
+          >History</button>
+          <button
+            onClick={() => setMode("live")}
+            className={"px-2.5 py-1 border-l border-border " + (mode === "live"
+              ? "bg-surface text-text font-medium"
+              : "text-muted hover:text-text")}
+          >Live tail</button>
+        </div>
+        <span className="text-[11px] text-muted">
+          {mode === "live"
+            ? <>Every <span className="font-mono text-text/80">QuotaReserve</span> as it happens</>
+            : <>Persisted in the <span className="font-mono text-text/80">quota_events</span> table</>}
+        </span>
+      </Toolbar>
+      {mode === "live" ? <QuotaLive /> : <QuotaHistory />}
+    </PanelCard>
+  );
+}
+
+function QuotaLive() {
+  const [events, setEvents] = useState<LiveEvent[]>([]);
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -439,7 +581,7 @@ function QuotaEventsPanel() {
           if (!ln.startsWith("data: ")) continue;
           if (pausedRef.current) continue;
           try {
-            const ev = JSON.parse(ln.slice(6)) as QuotaEvent;
+            const ev = JSON.parse(ln.slice(6)) as LiveEvent;
             setEvents((prev) => [ev, ...prev].slice(0, 500));
           } catch {}
         }
@@ -449,14 +591,11 @@ function QuotaEventsPanel() {
   }, []);
 
   return (
-    <PanelCard>
-      <Toolbar>
+    <>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-bg/20 text-[11px] text-muted">
         <LiveButton live={!paused} onToggle={() => setPaused(!paused)} />
-        <span className="text-[11px] text-muted">
-          Every <span className="font-mono text-text/80">QuotaReserve</span> call across the API
-        </span>
-        <span className="ml-auto text-[11px] text-muted">{events.length} events</span>
-      </Toolbar>
+        <span className="ml-auto">{events.length} buffered (last 500)</span>
+      </div>
       <div className="font-mono text-[11px] max-h-[65vh] overflow-y-auto p-3 space-y-0.5">
         {events.map((e, i) => (
           <div key={i} className="grid grid-cols-[10ch_8ch_12ch_14ch_9ch_1fr] gap-2 items-center hover:bg-bg/40 rounded px-1.5 py-0.5">
@@ -478,7 +617,89 @@ function QuotaEventsPanel() {
           <div className="text-muted italic py-10 text-center">listening for events…</div>
         )}
       </div>
-    </PanelCard>
+    </>
+  );
+}
+
+function QuotaHistory() {
+  const [events, setEvents] = useState<HistEvent[]>([]);
+  const [total, setTotal]   = useState(0);
+  const [user, setUser]     = useState("");
+  const [limit, setLimit]   = useState(DEFAULT_PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    const q = new URLSearchParams();
+    if (user) q.set("user", user);
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    void api<{ events: HistEvent[]; total: number }>(`/admin/quota-events/history?${q}`).then((r) => {
+      setEvents(r.events);
+      setTotal(r.total);
+    });
+  }, [user, limit, offset]);
+
+  useEffect(() => { setOffset(0); }, [user, limit]);
+
+  return (
+    <>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-bg/20 flex-wrap">
+        <Filter size={11} className="text-muted" />
+        <Input
+          placeholder="filter by user email..."
+          value={user}
+          onChange={(e) => setUser(e.target.value)}
+          className="h-7 text-xs w-52"
+        />
+        <div className="ml-auto">
+          <Pager total={total} limit={limit} offset={offset}
+                 onJump={setOffset} onPageSize={setLimit} />
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-wider text-muted border-b border-border">
+              <th className="px-4 py-2 font-semibold">When</th>
+              <th className="px-2 py-2 font-semibold">User</th>
+              <th className="px-2 py-2 font-semibold">Kind</th>
+              <th className="px-2 py-2 font-semibold text-right">Delta</th>
+              <th className="px-2 py-2 font-semibold">After</th>
+              <th className="px-4 py-2 font-semibold">Caller</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.map((e, i) => (
+              <tr key={i} className="border-b border-border/40 hover:bg-bg/50">
+                <td className="px-4 py-1.5 text-muted whitespace-nowrap font-mono text-[11px]">{formatDate(e.ts)}</td>
+                <td className="px-2 py-1.5 truncate max-w-[18ch]" title={e.userEmail || e.userId}>
+                  {e.userEmail || <span className="text-muted font-mono">{e.userId.slice(0, 8)}</span>}
+                </td>
+                <td className="px-2 py-1.5">
+                  <StatusPill variant={e.rejected ? "danger" : e.delta < 0 ? "muted" : "success"}>
+                    {e.rejected ? "REJECT" : e.delta < 0 ? "REFUND" : "CHARGE"}
+                  </StatusPill>
+                </td>
+                <td className="px-2 py-1.5 text-right font-mono text-[11px]">
+                  {e.delta > 0 ? "+" : ""}{formatBytes(Math.abs(e.delta))}
+                </td>
+                <td className="px-2 py-1.5 text-muted font-mono text-[11px]">
+                  {e.rejected ? "—" : formatBytes(e.newBytes)}
+                </td>
+                <td className="px-4 py-1.5 text-accent font-mono text-[11px] truncate max-w-[28ch]" title={e.caller}>
+                  {e.caller}
+                </td>
+              </tr>
+            ))}
+            {events.length === 0 && (
+              <tr><td colSpan={6} className="py-10 text-center text-muted italic text-xs">
+                no events recorded yet — they'll start showing up after the next quota charge
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

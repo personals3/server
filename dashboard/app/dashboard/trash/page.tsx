@@ -138,7 +138,8 @@ export default function TrashPage() {
         }
       />
 
-      <Card className="mb-6 bg-warning/5 border-warning/30">
+      <div className="space-y-6">
+      <Card className="bg-warning/5 border-warning/30">
         <div className="flex gap-3">
           <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
           <div className="text-xs text-text-soft space-y-1.5 leading-relaxed">
@@ -161,7 +162,7 @@ export default function TrashPage() {
             {picks.size > 0 && (
               <>
                 <button onClick={restoreSelected}
-                        className="text-xs text-blue-300 hover:underline inline-flex items-center gap-1">
+                        className="text-xs text-link hover:underline inline-flex items-center gap-1">
                   <RotateCcw size={12} /> Restore {picks.size}
                 </button>
                 <button onClick={purgeSelected}
@@ -216,7 +217,7 @@ export default function TrashPage() {
                           <span className="text-muted text-xs">{it.bucket}/</span>
                           <span className="font-mono truncate" title={it.key}>{it.key}</span>
                           {it.fromVersionedBucket && (
-                            <HistoryIcon size={11} className="text-blue-400 shrink-0"
+                            <HistoryIcon size={11} className="text-link shrink-0"
                                          aria-label="versioned bucket — restores the latest non-marker version" />
                           )}
                         </div>
@@ -226,7 +227,7 @@ export default function TrashPage() {
                       <td data-label="" className="actions py-2 text-right">
                         <button
                           onClick={() => restoreItems([it])}
-                          className="text-blue-300 hover:text-blue-200 mr-2"
+                          className="text-link hover:underline mr-2"
                           title="Restore this object">
                           <RotateCcw size={14} />
                         </button>
@@ -245,6 +246,7 @@ export default function TrashPage() {
           </div>
         )}
       </Card>
+      </div>
     </div>
   );
 }

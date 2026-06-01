@@ -129,6 +129,7 @@ export default function SearchPage() {
         description="Find files across all your buckets by name, type, or size. Trash and versioned copies are excluded."
       />
 
+      <div className="space-y-6">
       <Card>
         <form onSubmit={submit} className="space-y-3">
           <Input
@@ -192,7 +193,9 @@ export default function SearchPage() {
         </form>
       </Card>
 
-      {err && <p className="text-sm text-danger">{err}</p>}
+      {err && (
+        <div className="text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
+      )}
 
       {data && (
         <Card>
@@ -242,7 +245,7 @@ export default function SearchPage() {
                 <tbody>
                   {data.results.map((hit) => (
                     <tr key={`${hit.bucket}/${hit.key}`}
-                        className="border-t border-border hover:bg-panel">
+                        className="border-t border-border-subtle hover:bg-surface transition-colors">
                       <td data-label="Object" className="py-2">
                         <Link
                           href={`/dashboard/buckets/${encodeURIComponent(hit.bucket)}?path=${encodeURIComponent(parentOf(hit.key))}`}
@@ -278,6 +281,7 @@ export default function SearchPage() {
           </p>
         </Card>
       )}
+      </div>
     </div>
   );
 }

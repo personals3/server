@@ -66,8 +66,9 @@ function BucketsPageInner() {
         }
       />
 
+      <div className="space-y-6">
       {showCreate && (
-        <Card variant="elevated" className="mb-6">
+        <Card variant="elevated">
           <CreateBucketForm
             onCreated={() => { setShowCreate(false); void load(); }}
             onCancel={() => setShowCreate(false)}
@@ -95,6 +96,7 @@ function BucketsPageInner() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -271,7 +271,7 @@ type AuditDTO struct {
 	Timestamp  time.Time `json:"ts"`
 }
 
-// GET /admin/audit?user=&action=&since=&until=&limit=
+// GET /admin/audit?user=&action=&since=&until=&limit=&offset=
 func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -279,6 +279,12 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
 			limit = n
+		}
+	}
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
 		}
 	}
 
@@ -309,7 +315,19 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	args = append(args, limit)
+	// Total count — runs against the same WHERE without limit/offset.
+	var total int
+	countSQL := `
+		SELECT COUNT(*)
+		  FROM audit_log a
+		  LEFT JOIN users u ON u.id = a.user_id
+		 WHERE ` + where
+	if err := h.DB.QueryRow(r.Context(), countSQL, args...).Scan(&total); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+
+	args = append(args, limit, offset)
 	sqlStr := `
 		SELECT a.id, a.user_id::text, u.email, a.action,
 		       a.bucket_name, a.object_key, a.size_bytes, a.status_code,
@@ -318,7 +336,7 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		  LEFT JOIN users u ON u.id = a.user_id
 		 WHERE ` + where + `
 		 ORDER BY a.ts DESC
-		 LIMIT $` + strconv.Itoa(len(args))
+		 LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
 
 	rows, err := h.DB.Query(r.Context(), sqlStr, args...)
 	if err != nil {
@@ -338,7 +356,9 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, e)
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": out, "limit": limit})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"entries": out, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // ============================================================================
@@ -759,7 +779,7 @@ func (h *AdminHandler) UpdateSystemConfig(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /admin/transcode-jobs?status=&limit=
+// GET /admin/transcode-jobs?status=&limit=&offset=
 //
 // Browse the transcode job queue — pending / processing / done / failed /
 // skipped. Used by the Logs page in the dashboard so admins can spot
@@ -770,6 +790,10 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 && n <= 500 {
 		limit = n
 	}
+	offset := 0
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n >= 0 {
+		offset = n
+	}
 
 	where := "TRUE"
 	args := []any{}
@@ -777,7 +801,16 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 		args = append(args, s)
 		where = fmt.Sprintf("status = $%d", len(args))
 	}
-	args = append(args, limit)
+
+	// Total count for paging UI.
+	var total int
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM transcode_jobs WHERE %s", where)
+	if err := h.DB.QueryRow(r.Context(), countSQL, args...).Scan(&total); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+
+	args = append(args, limit, offset)
 	sqlStr := fmt.Sprintf(`
 		SELECT tj.id, tj.object_id, tj.file_type, tj.status, tj.attempts,
 		       tj.priority, tj.progress_pct,
@@ -788,7 +821,7 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 		  LEFT JOIN buckets b ON b.id = o.bucket_id
 		 WHERE %s
 		 ORDER BY tj.created_at DESC
-		 LIMIT $%d`, where, len(args))
+		 LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args))
 
 	rows, err := h.DB.Query(r.Context(), sqlStr, args...)
 	if err != nil {
@@ -823,7 +856,9 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, j)
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"jobs": out, "limit": limit})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"jobs": out, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // GET /admin/quota-events — Server-Sent Events stream of every QuotaReserve
@@ -878,4 +913,80 @@ func (h *AdminHandler) QuotaEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// GET /admin/quota-events/history?limit=&offset=&user= — paginated historical
+// view of the quota_events table. Companion to the live SSE endpoint above:
+// SSE shows new events; this lets admins page back through what's already
+// happened.
+func (h *AdminHandler) QuotaEventsHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	limit := 100
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 && n <= 500 {
+		limit = n
+	}
+	offset := 0
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n >= 0 {
+		offset = n
+	}
+
+	where := "TRUE"
+	args := []any{}
+	if u := q.Get("user"); u != "" {
+		// Looking up by email — JOIN against users so the UI doesn't need to
+		// resolve UUIDs first.
+		args = append(args, "%"+u+"%")
+		where = "u.email ILIKE $" + strconv.Itoa(len(args))
+	}
+
+	// Total count for the page footer.
+	var total int
+	countSQL := `
+		SELECT COUNT(*)
+		  FROM quota_events qe
+		  LEFT JOIN users u ON u.id = qe.user_id
+		 WHERE ` + where
+	if err := h.DB.QueryRow(r.Context(), countSQL, args...).Scan(&total); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+
+	args = append(args, limit, offset)
+	rowsSQL := `
+		SELECT qe.ts, qe.user_id, qe.delta, qe.new_bytes, qe.caller, qe.rejected,
+		       COALESCE(u.email, '')
+		  FROM quota_events qe
+		  LEFT JOIN users u ON u.id = qe.user_id
+		 WHERE ` + where + `
+		 ORDER BY qe.ts DESC
+		 LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
+
+	rows, err := h.DB.Query(r.Context(), rowsSQL, args...)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type evt struct {
+		TS        time.Time `json:"ts"`
+		UserID    string    `json:"userId"`
+		UserEmail string    `json:"userEmail"`
+		Delta     int64     `json:"delta"`
+		NewBytes  int64     `json:"newBytes"`
+		Caller    string    `json:"caller"`
+		Rejected  bool      `json:"rejected"`
+	}
+	out := []evt{}
+	for rows.Next() {
+		var e evt
+		if err := rows.Scan(&e.TS, &e.UserID, &e.Delta, &e.NewBytes, &e.Caller, &e.Rejected, &e.UserEmail); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"events": out, "total": total, "limit": limit, "offset": offset,
+	})
 }

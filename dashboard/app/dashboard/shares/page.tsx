@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, Link2, X, Clock, ArrowDown, ArrowUp,
   AlertTriangle, CheckCircle2, ArrowUpFromLine,
@@ -123,8 +124,9 @@ export default function SharesPage() {
         }
       />
 
+      <div className="space-y-6">
       {err && (
-        <div className="mb-4 text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
+        <div className="text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
       )}
 
       <Card>
@@ -141,28 +143,20 @@ export default function SharesPage() {
           <div className="space-y-2">
             {shares.map((s) => (
               <div key={s.id}
-                   className={`border rounded p-3 ${
-                     s.revoked  ? "border-red-500/40 bg-red-950/10" :
-                     s.expired  ? "border-zinc-500/40 bg-zinc-950/10 opacity-70" :
-                                  "border-border bg-bg"
+                   className={`border rounded-lg p-3 ${
+                     s.revoked  ? "border-danger/30 bg-danger/5" :
+                     s.expired  ? "border-border-subtle bg-bg/40 opacity-70" :
+                                  "border-border-subtle bg-bg"
                    }`}>
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center gap-2 text-xs flex-wrap">
+                    <div className="flex items-center gap-1.5 text-xs flex-wrap">
                       <MethodBadge m={s.method} />
-                      {s.forceDownload && (
-                        <span className="px-1 bg-zinc-500/30 text-zinc-300 rounded text-[9px]">DOWNLOAD</span>
-                      )}
-                      {s.revoked && (
-                        <span className="px-1 bg-red-500/30 text-red-300 rounded text-[9px]">REVOKED</span>
-                      )}
-                      {!s.revoked && s.expired && (
-                        <span className="px-1 bg-zinc-500/30 text-zinc-300 rounded text-[9px]">EXPIRED</span>
-                      )}
+                      {s.forceDownload && <Badge variant="neutral">Download</Badge>}
+                      {s.revoked && <Badge variant="danger">Revoked</Badge>}
+                      {!s.revoked && s.expired && <Badge variant="neutral">Expired</Badge>}
                       {s.active && (
-                        <span className="px-1 bg-green-500/30 text-green-300 rounded text-[9px] inline-flex items-center gap-0.5">
-                          <CheckCircle2 size={10} /> ACTIVE
-                        </span>
+                        <Badge variant="success"><CheckCircle2 size={10} /> Active</Badge>
                       )}
                     </div>
                     <div className="font-mono text-xs truncate" title={`${s.bucket}/${s.key}`}>
@@ -224,17 +218,15 @@ export default function SharesPage() {
           would otherwise still be valid.
         </p>
       </div>
+      </div>
     </div>
   );
 }
 
 function MethodBadge({ m }: { m: "GET" | "HEAD" | "PUT" }) {
-  const cls = m === "PUT"
-    ? "bg-amber-500/30 text-amber-300"
-    : "bg-blue-500/30 text-blue-300";
   return (
-    <span className={`px-1 rounded text-[9px] inline-flex items-center gap-0.5 ${cls}`}>
+    <Badge variant={m === "PUT" ? "warning" : "accent"}>
       {m === "PUT" ? <ArrowUpFromLine size={10} /> : null}{m}
-    </span>
+    </Badge>
   );
 }

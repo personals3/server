@@ -1,20 +1,27 @@
-// Live quota-events broadcaster.
+// Live quota-events broadcaster + persistent log.
 //
-// QuotaReserve publishes every charge/refund event to subscribed channels
-// so admins can `curl -N /api/admin/quota-events` and watch races as they
-// happen — exactly the missing visibility that let the multipart race
-// hide for so long.
+// QuotaReserve publishes every charge/refund/rejected event in two ways:
+//   1. Live: fanned out to in-process subscribers so admins can curl the
+//      SSE endpoint and watch races as they happen.
+//   2. Persistent: appended to the quota_events table so the admin Logs
+//      page can paginate through historical events instead of relying on
+//      whoever happened to be tailing at the time.
 //
-// In-process only; no Redis. Cheap channel-per-subscriber fan-out, drops
-// slow consumers via a non-blocking send.
+// The DB write is fired into a buffered channel and drained by a single
+// background goroutine — QuotaReserve never blocks waiting for INSERT.
+// If the buffer overruns (very high event rate, slow DB), the event is
+// dropped from the persistent log but still reaches live subscribers.
 
 package middleware
 
 import (
+	"context"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // QuotaEvent is one charge or refund row pushed to subscribers.
@@ -30,7 +37,34 @@ type QuotaEvent struct {
 var (
 	quotaSubsMu sync.Mutex
 	quotaSubs   []chan QuotaEvent
+
+	// Persistence queue — buffered so a slow DB doesn't slow QuotaReserve.
+	quotaPersistCh   chan QuotaEvent
+	quotaPersistOnce sync.Once
 )
+
+// StartQuotaEventPersister wires the background writer that drains
+// quotaPersistCh into the quota_events table. Call once at server boot;
+// subsequent calls are no-ops.
+func StartQuotaEventPersister(db *pgxpool.Pool) {
+	quotaPersistOnce.Do(func() {
+		quotaPersistCh = make(chan QuotaEvent, 1024)
+		go func() {
+			for e := range quotaPersistCh {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_, err := db.Exec(ctx, `
+					INSERT INTO quota_events (ts, user_id, delta, new_bytes, caller, rejected)
+					VALUES ($1, $2, $3, $4, $5, $6)`,
+					e.TS, e.UserID, e.Delta, e.NewBytes, e.Caller, e.Rejected)
+				cancel()
+				if err != nil {
+					// Don't crash on a write failure — log and keep draining.
+					log.Printf("quota_events insert failed: %v", err)
+				}
+			}
+		}()
+	})
+}
 
 // SubscribeQuotaEvents returns a channel that receives every QuotaReserve
 // event from this moment forward. Caller MUST call the returned cancel
@@ -58,18 +92,26 @@ func SubscribeQuotaEvents() (<-chan QuotaEvent, func()) {
 	}
 }
 
-// broadcastQuotaEvent fans an event out to all current subscribers.
-// Non-blocking — a full buffer drops the event for that subscriber.
+// broadcastQuotaEvent fans an event out to all current subscribers AND
+// queues it for persistent storage. Both sends are non-blocking.
 func broadcastQuotaEvent(e QuotaEvent) {
+	// Live SSE subscribers.
 	quotaSubsMu.Lock()
-	defer quotaSubsMu.Unlock()
-	if len(quotaSubs) == 0 {
-		return
-	}
 	for _, ch := range quotaSubs {
 		select {
 		case ch <- e:
 		default: // slow consumer; drop
+		}
+	}
+	quotaSubsMu.Unlock()
+
+	// Persistent log — non-blocking. If StartQuotaEventPersister wasn't
+	// called (tests, scripts) or the buffer is full, the event is lost.
+	if quotaPersistCh != nil {
+		select {
+		case quotaPersistCh <- e:
+		default:
+			log.Printf("quota_events persist buffer full; dropping event for %s", e.UserID)
 		}
 	}
 }

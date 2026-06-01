@@ -56,6 +56,10 @@ func main() {
 	defer pool.Close()
 	log.Printf("connected to postgres")
 
+	// Drain QuotaEvent broadcasts into the persistent quota_events table.
+	// Must be running before any QuotaReserve call fires.
+	mw.StartQuotaEventPersister(pool)
+
 	rdb, err := cache.Connect(ctx, cfg.ValkeyURL)
 	if err != nil {
 		log.Fatalf("valkey connect: %v", err)
@@ -317,8 +321,9 @@ func main() {
 			r.Delete("/users/{id}", adminH.DeactivateUser)
 			r.Get("/audit",         adminH.ListAudit)
 			r.Get("/stats",         adminH.Stats)
-			r.Get("/quota-events",  adminH.QuotaEvents) // SSE — live quota stream
-			r.Get("/transcode-jobs", adminH.TranscodeJobs)
+			r.Get("/quota-events",         adminH.QuotaEvents)        // SSE — live quota stream
+			r.Get("/quota-events/history", adminH.QuotaEventsHistory) // paginated history
+			r.Get("/transcode-jobs",       adminH.TranscodeJobs)
 
 			// Onboarding queue
 			r.Get("/requests",                            requestsH.List)

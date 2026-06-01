@@ -66,15 +66,24 @@ type ListPartsResp struct {
 
 // ---------- Helpers ---------------------------------------------------------
 
-// loadUpload fetches an upload owned by the current user and verifies it's still in-progress.
+// loadUpload fetches an upload owned by the current user (from context).
+// Used by HTTP handlers in the authenticated chain. For the signed-URL path
+// (no context user), use loadUploadByID with an explicit userID.
 func loadUpload(r *http.Request, db *pgxpool.Pool, uploadID string) (bucketID uuid.UUID, key, contentType string, err error) {
 	u := middleware.MustUser(r.Context())
-	err = db.QueryRow(r.Context(), `
+	return loadUploadByID(r.Context(), db, uploadID, u.ID)
+}
+
+// loadUploadByID is the userID-explicit variant — callable from any context,
+// including the signed-URL multipart finalize path which has no
+// Authenticator-injected user.
+func loadUploadByID(ctx context.Context, db *pgxpool.Pool, uploadID string, userID uuid.UUID) (bucketID uuid.UUID, key, contentType string, err error) {
+	err = db.QueryRow(ctx, `
 		SELECT bucket_id, key, content_type
 		  FROM multipart_uploads
 		 WHERE upload_id = $1 AND owner_id = $2 AND status = 'in-progress'
 		   AND expires_at > now()`,
-		uploadID, u.ID,
+		uploadID, userID,
 	).Scan(&bucketID, &key, &contentType)
 	return
 }
@@ -322,12 +331,26 @@ func (h *MultipartHandler) UploadPart(w http.ResponseWriter, r *http.Request) {
 
 // ---------- POST /:bucket/*?uploadId=X — complete --------------------------
 
+// Complete is the HTTP entry point on the authenticated chain. It pulls the
+// caller's user ID from the request context and delegates to CompleteForUser.
+//
+// The signed-URL multipart finalize path in share.go calls CompleteForUser
+// directly with the upload's recorded owner_id — so the actual implementation
+// never reads from the context user struct, avoiding the historical
+// "synthesize a fake User" pattern.
 func (h *MultipartHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	u := middleware.MustUser(r.Context())
+	h.CompleteForUser(w, r, u.ID)
+}
+
+// CompleteForUser does the actual work of finishing a multipart upload.
+// userID MUST be the authenticated owner — either pulled from context
+// (Complete) or resolved from a presigned-URL signature (share.go).
+func (h *MultipartHandler) CompleteForUser(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	bucketName := chi.URLParam(r, "bucket")
 	uploadID := r.URL.Query().Get("uploadId")
 
-	bucketID, key, contentType, err := loadUpload(r, h.DB, uploadID)
+	bucketID, key, contentType, err := loadUploadByID(r.Context(), h.DB, uploadID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.WriteError(w, http.StatusNotFound, "NO_SUCH_UPLOAD", "upload not found or not yours")
 		return
@@ -460,7 +483,7 @@ func (h *MultipartHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		bucketID, key,
 	).Scan(&existingSize)
 	if existingSize > 0 {
-		_ = middleware.QuotaReserve(r.Context(), h.DB, u.ID, -existingSize)
+		_ = middleware.QuotaReserve(r.Context(), h.DB, userID, -existingSize)
 	}
 
 	// Move assembled file into place (atomic).
@@ -468,7 +491,7 @@ func (h *MultipartHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		_ = os.Remove(tmpPath)
 		// Refund quota we already gave back
 		if existingSize > 0 {
-			_ = middleware.QuotaReserve(r.Context(), h.DB, u.ID, existingSize)
+			_ = middleware.QuotaReserve(r.Context(), h.DB, userID, existingSize)
 		}
 		httpx.WriteError(w, http.StatusInternalServerError, "FS_RENAME", err.Error())
 		return
@@ -535,8 +558,14 @@ func (h *MultipartHandler) Complete(w http.ResponseWriter, r *http.Request) {
 
 // ---------- DELETE /:bucket/*?uploadId=X — abort ---------------------------
 
+// Abort is the HTTP entry point on the authenticated chain.
 func (h *MultipartHandler) Abort(w http.ResponseWriter, r *http.Request) {
 	u := middleware.MustUser(r.Context())
+	h.AbortForUser(w, r, u.ID)
+}
+
+// AbortForUser does the actual work. userID MUST be the authenticated owner.
+func (h *MultipartHandler) AbortForUser(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
 	uploadID := r.URL.Query().Get("uploadId")
 
 	var bucketID uuid.UUID
@@ -544,7 +573,7 @@ func (h *MultipartHandler) Abort(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT bucket_id, total_size FROM multipart_uploads
 		 WHERE upload_id = $1 AND owner_id = $2 AND status = 'in-progress'`,
-		uploadID, u.ID,
+		uploadID, userID,
 	).Scan(&bucketID, &totalSize)
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.WriteError(w, http.StatusNotFound, "NO_SUCH_UPLOAD", "upload not found or not yours")
@@ -559,7 +588,7 @@ func (h *MultipartHandler) Abort(w http.ResponseWriter, r *http.Request) {
 	// thing the client does and r.Context() can be cancelled out from
 	// under us by the same disconnect that triggered the abort.
 	if totalSize > 0 {
-		_ = middleware.QuotaReserve(context.Background(), h.DB, u.ID, -totalSize)
+		_ = middleware.QuotaReserve(context.Background(), h.DB, userID, -totalSize)
 	}
 
 	if _, err := h.DB.Exec(context.Background(),

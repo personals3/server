@@ -37,13 +37,13 @@ func UserFromContext(ctx context.Context) *User {
 	return u
 }
 
-// WithUser attaches a User to a context. Exported so handlers that
-// authenticate via a non-Bearer credential (e.g. signed-URL multipart
-// finalize) can synthesize the same context shape that downstream
-// authenticated handlers rely on via MustUser.
-func WithUser(ctx context.Context, u *User) context.Context {
-	return context.WithValue(ctx, userKey, u)
-}
+// (WithUser previously existed for the signed-URL multipart finalize path —
+// it synthesized a partial User{ID: ownerID} so shared handlers could read
+// it via MustUser. That trapdoor invited bugs in any future code that
+// reached for User.Role/Email/QuotaBytes from context. The shared handlers
+// now expose explicit userID variants instead — see
+// MultipartHandler.CompleteForUser / AbortForUser — so this escape hatch is
+// gone on purpose. Do not re-add it.)
 
 // MustUser panics if no user is attached — call only inside an authenticated handler.
 func MustUser(ctx context.Context) *User {

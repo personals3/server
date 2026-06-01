@@ -303,11 +303,12 @@ export default function BucketPage() {
         }
       />
 
+      <div className="space-y-6">
       {isPublic && <PublicBanner bucket={name} />}
 
       {/* Upload section — elevated card pulls the eye, this is the primary
           action on bucket pages. */}
-      <Card variant="elevated" className="mb-6">
+      <Card variant="elevated">
         <SectionHeader
           title={<span className="inline-flex items-center gap-2"><UploadIcon size={14} className="text-muted" />Upload files</span>}
           description={
@@ -330,9 +331,7 @@ export default function BucketPage() {
       </Card>
 
       {selected && (
-        <div className="mb-6">
-          <PreviewCard bucket={name} obj={selected} versioning={versioning} onClose={() => setSelected(null)} onReload={() => void load()} />
-        </div>
+        <PreviewCard bucket={name} obj={selected} versioning={versioning} onClose={() => setSelected(null)} onReload={() => void load()} />
       )}
 
       {/* File list — toolbar + list. */}
@@ -486,6 +485,7 @@ export default function BucketPage() {
           </div>
         )}
       </Card>
+      </div>
     </div>
   );
 }

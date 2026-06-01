@@ -42,11 +42,21 @@ type cleanupRunDTO struct {
 	LogPath      string         `json:"logPath"`
 }
 
-// GET /admin/cleanup — last 50 runs + a quick summary.
+// GET /admin/cleanup?limit=&offset= — paginated cleaner runs + window summary.
 func (h *CleanupHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 500 {
 		limit = n
+	}
+	offset := 0
+	if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n >= 0 {
+		offset = n
+	}
+
+	var total int
+	if err := h.DB.QueryRow(r.Context(), `SELECT COUNT(*) FROM cleanup_runs`).Scan(&total); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
@@ -56,7 +66,7 @@ func (h *CleanupHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 		       log_path
 		  FROM cleanup_runs
 		 ORDER BY started_at DESC
-		 LIMIT $1`, limit)
+		 LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
@@ -101,6 +111,9 @@ func (h *CleanupHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"runs":   out,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 		"window": map[string]any{
 			"runs":         len(out),
 			"bytesFreed":   totalBytes,
