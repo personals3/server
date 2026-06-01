@@ -112,11 +112,30 @@ export function ShareModal({ bucket, objectKey, onClose }: Props) {
               Upload
             </button>
           </div>
-          <p className="text-[10px] text-muted mt-1">
-            {linkType === "PUT"
-              ? <>Anyone with this URL can replace <code className="font-mono">{objectKey}</code>. Keep the expiry short.</>
-              : <>Anyone with this URL can read the file — no login needed.</>}
-          </p>
+          {linkType === "PUT" ? (
+            <div className="text-[11px] text-muted mt-2 space-y-1.5 leading-relaxed">
+              <p>
+                An <strong className="text-text">upload link</strong> lets someone
+                send you a file without making them an account.
+              </p>
+              <p>
+                Example: you want a friend to drop a video into your bucket.
+                You generate this link, send it to them, they upload one file
+                to the path <code className="font-mono text-text">{objectKey}</code> —
+                done. The file lands in your storage, against your quota.
+              </p>
+              <p className="text-warning">
+                Anyone holding the URL can write to this exact path until it
+                expires. Use a short expiry (1h is plenty for one upload).
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted mt-1">
+              A read-only link to this file. Anyone with the URL can open it
+              — no login needed. The URL contains a random token only; nobody
+              can guess the underlying bucket or path.
+            </p>
+          )}
         </div>
 
         <div>

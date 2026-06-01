@@ -659,6 +659,11 @@ function PreviewCard({ bucket, obj, versioning, isPublic, onClose, onReload }: {
   // the ShareModal closes so a freshly-created link shows up immediately
   // instead of waiting for the next poll tick.
   const [sharesNonce, setSharesNonce] = useState(0);
+  // Active-share count is lifted up from ActiveSharesBar so the share-link
+  // CREATE button can hide itself when one already exists. The server also
+  // rejects duplicate creation with 409 ALREADY_SHARED — this is just so
+  // the button doesn't tempt the user in the first place.
+  const [activeShareCount, setActiveShareCount] = useState(0);
   const kind = classify(obj.key, obj.contentType);
   const toast = useToast();
   const publicURL = typeof window !== "undefined"
@@ -805,13 +810,22 @@ function PreviewCard({ bucket, obj, versioning, isPublic, onClose, onReload }: {
               Delete streams
             </button>
           )}
-          <button
-            onClick={() => setShareOpen(true)}
-            className="text-xs text-accent hover:underline inline-flex items-center gap-1"
-            title="Create a time-limited public link"
-          >
-            <Share2 size={12} /> Share link
-          </button>
+          {activeShareCount === 0 ? (
+            <button
+              onClick={() => setShareOpen(true)}
+              className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+              title="Create a time-limited public link"
+            >
+              <Share2 size={12} /> Share link
+            </button>
+          ) : (
+            <span
+              className="text-xs text-muted inline-flex items-center gap-1"
+              title="An active share link already exists for this file. Manage it in the row below."
+            >
+              <Share2 size={12} /> Shared ({activeShareCount})
+            </span>
+          )}
           {isPublic && (
             <button
               onClick={copyPublic}
@@ -844,8 +858,14 @@ function PreviewCard({ bucket, obj, versioning, isPublic, onClose, onReload }: {
 
       {/* Active share links for this file — copy + revoke inline.
           Hides when there are zero active links so the preview stays clean
-          for the common case. */}
-      <ActiveSharesBar bucket={bucket} objectKey={obj.key} reloadNonce={sharesNonce} />
+          for the common case. Count is reported up so the "Share link"
+          button can hide itself when there's already one in circulation. */}
+      <ActiveSharesBar
+        bucket={bucket}
+        objectKey={obj.key}
+        reloadNonce={sharesNonce}
+        onCount={setActiveShareCount}
+      />
       {versionsOpen && (
         <VersionsModal
           bucket={bucket}
@@ -986,10 +1006,11 @@ function PreviewCard({ bucket, obj, versioning, isPublic, onClose, onReload }: {
  * link in ShareModal, so the row appears immediately without waiting for
  * the next polling tick.
  */
-function ActiveSharesBar({ bucket, objectKey, reloadNonce }: {
+function ActiveSharesBar({ bucket, objectKey, reloadNonce, onCount }: {
   bucket: string;
   objectKey: string;
   reloadNonce: number;
+  onCount?: (n: number) => void;
 }) {
   interface Share {
     id: string;
@@ -1009,9 +1030,13 @@ function ActiveSharesBar({ bucket, objectKey, reloadNonce }: {
       active: "1", bucket, key: objectKey,
     });
     void api<{ shares: Share[] }>(`/shares?${qs}`)
-      .then((r) => setShares(r.shares || []))
-      .catch(() => setShares([]));
-  }, [bucket, objectKey]);
+      .then((r) => {
+        const next = r.shares || [];
+        setShares(next);
+        onCount?.(next.length);
+      })
+      .catch(() => { setShares([]); onCount?.(0); });
+  }, [bucket, objectKey, onCount]);
 
   useEffect(() => {
     load();

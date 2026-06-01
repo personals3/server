@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -116,42 +118,65 @@ func (h *ShareHandler) CreatePresignedURL(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Refuse to mint a second active share for the same (bucket, key, method).
+	// Avoids the UX foot-gun of having three GET URLs in circulation when the
+	// user only wanted one. The 409 body includes the existing share's id so
+	// the dashboard can offer "extend it" or "revoke it" as the alternative.
+	var existingID uuid.UUID
+	var existingExpiresAt time.Time
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT id, expires_at FROM share_links
+		 WHERE owner_id = $1 AND bucket_name = $2 AND object_key = $3
+		   AND method = $4 AND NOT revoked AND expires_at > now()
+		 LIMIT 1`,
+		u.ID, bucketName, key, req.Method,
+	).Scan(&existingID, &existingExpiresAt)
+	if err == nil {
+		httpx.WriteErrorDetails(w, http.StatusConflict, "ALREADY_SHARED",
+			"an active share link for this file already exists — extend or revoke the existing one before creating a new one",
+			map[string]any{
+				"shareId":   existingID,
+				"expiresAt": existingExpiresAt.Unix(),
+				"method":    req.Method,
+			})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+
 	expiresAt := time.Now().Unix() + req.ExpiresSec
 	sig := auth.SignPresignedURL(h.JWTSecret, req.Method, bucketName, key, expiresAt)
 
-	// Persist the share so it's listable + revocable. sig_hash is the lookup
-	// key — sha256(sig). We don't store the raw sig because the URL is the
-	// credential; a DB compromise should not yield reusable share URLs.
+	// Persist the share so it's listable + revocable.
+	//   sig_hash  — sha256(sig). Lookup key for the LEGACY URL form
+	//               /share/<bucket>/<key>?sig=...&expires=... still supported.
+	//   url_token — short opaque token. Lookup key for the NEW URL form
+	//               /s/<token>, which doesn't leak bucket name, key, method,
+	//               or expiry through the URL itself. The DB row is the
+	//               authoritative source of all that.
 	sigHash := sha256.Sum256([]byte(sig))
+	urlToken, err := newShareToken()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "TOKEN", err.Error())
+		return
+	}
 	var shareID uuid.UUID
 	if err := h.DB.QueryRow(r.Context(), `
 		INSERT INTO share_links
-		  (owner_id, bucket_name, object_key, method, sig_hash, expires_at, force_download)
-		VALUES ($1, $2, $3, $4, $5, to_timestamp($6), $7)
+		  (owner_id, bucket_name, object_key, method, sig_hash, url_token, expires_at, force_download)
+		VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7), $8)
 		RETURNING id`,
-		u.ID, bucketName, key, req.Method, sigHash[:], expiresAt, req.Download,
+		u.ID, bucketName, key, req.Method, sigHash[:], urlToken, expiresAt, req.Download,
 	).Scan(&shareID); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
 	}
 
-	// URL-encode each path segment so spaces / unicode survive.
-	urlPath := "/share/" + url.PathEscape(bucketName)
-	for _, seg := range strings.Split(key, "/") {
-		urlPath += "/" + url.PathEscape(seg)
-	}
-	q := make(url.Values)
-	q.Set("sig", sig)
-	q.Set("expires", strconv.FormatInt(expiresAt, 10))
-	if req.Method != "GET" {
-		q.Set("method", req.Method)
-	}
-	if req.Download {
-		q.Set("download", "1")
-	}
-
+	// Emit the opaque short URL. No path, no expiry, no method visible.
 	httpx.WriteJSON(w, http.StatusOK, presignResp{
-		URL:       urlPath + "?" + q.Encode(),
+		URL:       "/s/" + urlToken,
 		ExpiresAt: expiresAt,
 		Method:    req.Method,
 		ShareID:   shareID,
@@ -536,10 +561,24 @@ func (h *ShareHandler) ServePresignedPUT(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Validated — hand off to the shared body. The opaque /s/{token} PUT
+	// path arrives here too, having validated via DB lookup instead of sig.
+	h.servePresignedPUTBody(w, r, bucketName, key)
+}
+
+// servePresignedPUTBody runs the actual upload after method+expiry+revoked
+// have been validated by either:
+//   - ServePresignedPUT (legacy /share/<bucket>/<key>?sig=...&method=PUT)
+//   - ServeOpaqueShare (new /s/<token>, looked up by token)
+//
+// Both forms end up here with the same (bucketName, key) tuple. Refactored
+// out so the opaque URL flow doesn't need to re-implement quota
+// reservation, disk health, atomic write, etc.
+func (h *ShareHandler) servePresignedPUTBody(w http.ResponseWriter, r *http.Request, bucketName, key string) {
 	// Resolve bucket + owner — the signature already attests to ownership
 	// at sign time, but we still need the owner_id for quota accounting.
 	var bucketID, ownerID uuid.UUID
-	err = h.DB.QueryRow(r.Context(),
+	err := h.DB.QueryRow(r.Context(),
 		`SELECT id, owner_id FROM buckets WHERE name = $1`,
 		bucketName,
 	).Scan(&bucketID, &ownerID)
@@ -863,4 +902,144 @@ func (h *ShareHandler) ServePresignedMultipartFinalize(w http.ResponseWriter, r 
 		return
 	}
 	h.MP.CompleteForUser(w, r, ownerID)
+}
+
+// newShareToken returns a 32-character url-safe random token. base64
+// without padding so it's safe to drop into a URL without escaping.
+// 24 random bytes → 32 chars after base64.RawURLEncoding, giving ~192
+// bits of entropy — way more than we need to make guessing infeasible.
+func newShareToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// ServeOpaqueShare handles GET /s/{token} — the new short share URL form.
+// Looks up the row by url_token (NOT by bucket+key path) and serves the
+// file behind it. The URL leaks nothing about bucket, key, method, or
+// expiry — all of that lives only in the DB row keyed by the token.
+//
+// Same revocation + expiry + caching semantics as the legacy
+// /share/<bucket>/<key>?sig=... path, just with a cleaner URL.
+func (h *ShareHandler) ServeOpaqueShare(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	if token == "" || len(token) > 64 {
+		http.Error(w, "bad token", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		bucketName, key, method string
+		dbExpires               time.Time
+		dbRevoked               bool
+		forceDownloadDB         bool
+		shareID                 uuid.UUID
+	)
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id, bucket_name, object_key, method,
+		       expires_at, revoked, force_download
+		  FROM share_links WHERE url_token = $1`,
+		token,
+	).Scan(&shareID, &bucketName, &key, &method, &dbExpires, &dbRevoked, &forceDownloadDB)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if r.Method != method && !(method == "GET" && r.Method == "HEAD") {
+		http.Error(w, "method not allowed for this link", http.StatusMethodNotAllowed)
+		return
+	}
+	if dbRevoked {
+		w.Header().Set("Cache-Control", "no-store, private, max-age=0, must-revalidate")
+		http.Error(w, "link revoked", http.StatusForbidden)
+		return
+	}
+	if time.Now().After(dbExpires) {
+		w.Header().Set("Cache-Control", "no-store, private, max-age=0, must-revalidate")
+		http.Error(w, "link expired", http.StatusForbidden)
+		return
+	}
+	go func(id uuid.UUID) {
+		_, _ = h.DB.Exec(r.Context(), `
+			UPDATE share_links
+			   SET last_used_at = now(), use_count = use_count + 1
+			 WHERE id = $1`, id)
+	}(shareID)
+
+	if method == "PUT" {
+		// Defer to the shared PUT body. We pass the resolved (bucket, key)
+		// via context-free arguments — same shape the legacy ?sig= path
+		// constructs from URL params, post-validation.
+		h.servePresignedPUTBody(w, r, bucketName, key)
+		return
+	}
+
+	// GET / HEAD — same body as ServePresigned below the cache headers.
+	var bucketID, ownerID uuid.UUID
+	err = h.DB.QueryRow(r.Context(),
+		`SELECT id, owner_id FROM buckets WHERE name = $1`, bucketName,
+	).Scan(&bucketID, &ownerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	var size int64
+	var etag, contentType string
+	var updatedAt time.Time
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT size_bytes, etag, content_type, updated_at
+		  FROM objects
+		 WHERE bucket_id = $1 AND key = $2 AND NOT is_deleted`,
+		bucketID, key,
+	).Scan(&size, &etag, &contentType, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("ETag", `"`+etag+`"`)
+	w.Header().Set("Accept-Ranges", "bytes")
+	// Revocable link — never cacheable. Same headers as ServePresigned.
+	w.Header().Set("Cache-Control", "no-store, private, max-age=0, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	// download=1 query string still overrides per request, but the DB
+	// force_download flag takes precedence (mirrors ServePresigned).
+	wantDownload := forceDownloadDB || r.URL.Query().Get("download") == "1"
+	if wantDownload {
+		filename := key
+		if i := strings.LastIndexByte(key, '/'); i >= 0 {
+			filename = key[i+1:]
+		}
+		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filename))
+	}
+
+	if r.Method == "HEAD" {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	file, err := h.FS.OpenObject(bucketID.String(), key)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+	http.ServeContent(w, r, key, updatedAt, file)
 }

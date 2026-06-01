@@ -226,7 +226,7 @@ export default function SharesPage() {
 function MethodBadge({ m }: { m: "GET" | "HEAD" | "PUT" }) {
   return (
     <Badge variant={m === "PUT" ? "warning" : "accent"}>
-      {m === "PUT" ? <ArrowUpFromLine size={10} /> : null}{m}
+      {m === "PUT" ? <><ArrowUpFromLine size={10} /> Upload</> : "Download"}
     </Badge>
   );
 }

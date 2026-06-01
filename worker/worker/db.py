@@ -435,9 +435,19 @@ class Database:
             )
 
     def job_still_exists(self, job_id: str) -> bool:
-        """True if the job row hasn't been cascade-deleted (i.e. its object
-        is still in the DB). Use self.cursor() context manager so each call
-        commits its transaction — otherwise we see stale snapshots."""
+        """True if the job row hasn't been cascade-deleted AND hasn't been
+        admin-cancelled. Workers poll this between ffmpeg ticks to know
+        whether they should abort. Cancelled rows stick around (kept as
+        audit history in the Logs view) but the worker treats them as
+        "stop now" — same semantics as the row vanishing.
+
+        Use self.cursor() context manager so each call commits its
+        transaction — otherwise we see stale snapshots.
+        """
         with self.cursor() as cur:
-            cur.execute("SELECT 1 FROM transcode_jobs WHERE id = %s", (job_id,))
+            cur.execute(
+                "SELECT 1 FROM transcode_jobs "
+                "WHERE id = %s AND status NOT IN ('cancelled')",
+                (job_id,),
+            )
             return cur.fetchone() is not None

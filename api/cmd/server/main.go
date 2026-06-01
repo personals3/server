@@ -250,6 +250,13 @@ func main() {
 	// Pre-signed multipart finalize / abort — POST with ?finalize=1 or ?abort=1
 	r.Post("/share/{bucket}/*", shareH.ServePresignedMultipartFinalize)
 
+	// Opaque short form: /s/<token>. The token IS the credential; the URL
+	// leaks no path, expiry, or method. Same revocation/expiry semantics
+	// as the legacy /share path — just a tidier URL surface.
+	r.Get("/s/{token}",  shareH.ServeOpaqueShare)
+	r.Head("/s/{token}", shareH.ServeOpaqueShare)
+	r.Put("/s/{token}",  shareH.ServeOpaqueShare)
+
 	// Public bucket routes — bucket.is_public flag is the sole gate.
 	// /public/{bucket}/ → index.html or JSON listing; /public/{bucket}/{key} → bytes.
 	r.Get("/public/{bucket}",    publicH.Serve)  // no trailing slash → treat as dir

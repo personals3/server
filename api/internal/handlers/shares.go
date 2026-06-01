@@ -84,7 +84,8 @@ func (h *SharesHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, bucket_name, object_key, method, expires_at, force_download,
-		       revoked, revoked_at, created_at, last_used_at, use_count
+		       revoked, revoked_at, created_at, last_used_at, use_count,
+		       COALESCE(url_token, '')
 		  FROM share_links`+where+`
 		 ORDER BY created_at DESC
 		 LIMIT 500`, args...)
@@ -99,21 +100,25 @@ func (h *SharesHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var s shareDTO
 		var revokedAt, lastUsedAt *time.Time
+		var urlToken string
 		if err := rows.Scan(&s.ID, &s.Bucket, &s.Key, &s.Method, &s.ExpiresAt,
 			&s.ForceDownload, &s.Revoked, &revokedAt, &s.CreatedAt,
-			&lastUsedAt, &s.UseCount); err != nil {
+			&lastUsedAt, &s.UseCount, &urlToken); err != nil {
 			continue
 		}
 		s.RevokedAt = revokedAt
 		s.LastUsedAt = lastUsedAt
 		s.Expired = s.ExpiresAt.Before(now)
-		// Reconstruct the share URL so the dashboard can offer "copy" on
-		// the row even after the create modal closed. Only emit it when
-		// the link is still usable — revoked/expired links shouldn't tempt
-		// anyone to re-share them.
-		if h.JWTSecret != "" && !s.Revoked && !s.Expired {
-			s.URL = buildShareURL(h.JWTSecret, s.Bucket, s.Key, s.Method,
-				s.ExpiresAt.Unix(), s.ForceDownload)
+		// Surface the short URL when we have a token (new shares), falling
+		// back to the legacy signed URL for old rows. Only emit when
+		// usable — revoked/expired links shouldn't tempt anyone to share.
+		if !s.Revoked && !s.Expired {
+			if urlToken != "" {
+				s.URL = "/s/" + urlToken
+			} else if h.JWTSecret != "" {
+				s.URL = buildShareURL(h.JWTSecret, s.Bucket, s.Key, s.Method,
+					s.ExpiresAt.Unix(), s.ForceDownload)
+			}
 		}
 		s.Active = !s.Revoked && !s.Expired
 		out = append(out, s)

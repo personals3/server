@@ -815,6 +815,14 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args = append(args, limit, offset)
+	// Sort order matches operator intent:
+	//   1. Active work (processing → pending → waiting) at the top so admins
+	//      see what's running NOW first.
+	//   2. Within active, by priority ASC (lower number = higher priority —
+	//      same convention the worker's claim query uses), so a bumped row
+	//      visibly moves up.
+	//   3. Then by created_at — DESC for terminal rows (recent failures
+	//      first), ASC for active (oldest queued runs first, FIFO).
 	sqlStr := fmt.Sprintf(`
 		SELECT tj.id, tj.object_id, tj.file_type, tj.status, tj.attempts,
 		       tj.priority, tj.progress_pct,
@@ -824,7 +832,17 @@ func (h *AdminHandler) TranscodeJobs(w http.ResponseWriter, r *http.Request) {
 		  LEFT JOIN objects o ON o.id = tj.object_id
 		  LEFT JOIN buckets b ON b.id = o.bucket_id
 		 WHERE %s
-		 ORDER BY tj.created_at DESC
+		 ORDER BY
+		   CASE tj.status
+		     WHEN 'processing' THEN 0
+		     WHEN 'pending'    THEN 1
+		     WHEN 'waiting'    THEN 2
+		     ELSE 3
+		   END,
+		   tj.priority,
+		   CASE WHEN tj.status IN ('processing','pending','waiting')
+		        THEN tj.created_at END ASC,
+		   tj.created_at DESC
 		 LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args))
 
 	rows, err := h.DB.Query(r.Context(), sqlStr, args...)
@@ -1015,9 +1033,12 @@ func (h *AdminHandler) QuotaEventsHistory(w http.ResponseWriter, r *http.Request
 // ============================================================================
 
 // DELETE /admin/transcode-jobs/{id} — cancel one job.
-// Publishes a cancel to any worker holding the ffmpeg PID, then deletes
-// the row. The worker also notices the missing row on the next progress
-// check and exits ffmpeg as a fallback.
+//
+// Publishes a cancel to the worker holding the ffmpeg PID, then marks the
+// row 'cancelled' (NOT deleting it). The row stays in the admin Logs view
+// as audit history so the admin can see what was killed and when. The
+// worker's job_still_exists() check treats 'cancelled' the same as "row
+// gone" so ffmpeg stops on the next tick.
 func (h *AdminHandler) CancelTranscodeJob(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	jobID, err := uuid.Parse(idStr)
@@ -1025,13 +1046,11 @@ func (h *AdminHandler) CancelTranscodeJob(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, http.StatusBadRequest, "BAD_ID", "invalid uuid")
 		return
 	}
-	// Look up the row first so we can tell the worker to stop AND so we
-	// can return a useful "what did we just kill" body to the admin.
 	var objectID uuid.UUID
-	var fileType, status string
+	var fileType, wasStatus string
 	err = h.DB.QueryRow(r.Context(),
 		`SELECT object_id, file_type, status FROM transcode_jobs WHERE id = $1`, jobID,
-	).Scan(&objectID, &fileType, &status)
+	).Scan(&objectID, &fileType, &wasStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.WriteError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
 		return
@@ -1040,15 +1059,29 @@ func (h *AdminHandler) CancelTranscodeJob(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
 	}
+	if wasStatus == "cancelled" || wasStatus == "done" || wasStatus == "failed" {
+		// Already terminal — nothing to kill, and overwriting wasStatus
+		// would lose history. Respond idempotently.
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"cancelled": false, "jobId": jobID, "wasStatus": wasStatus,
+			"reason": "job is already in a terminal state",
+		})
+		return
+	}
 	cache.PublishCancelJob(r.Context(), h.RDB, jobID, "admin cancel")
-	if _, err := h.DB.Exec(r.Context(),
-		`DELETE FROM transcode_jobs WHERE id = $1`, jobID); err != nil {
+	if _, err := h.DB.Exec(r.Context(), `
+		UPDATE transcode_jobs
+		   SET status   = 'cancelled',
+		       done_at  = now(),
+		       error    = 'cancelled by admin (was ' || $2 || ')',
+		       updated_at = now()
+		 WHERE id = $1`, jobID, wasStatus); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"cancelled": true, "jobId": jobID, "objectId": objectID,
-		"fileType": fileType, "wasStatus": status,
+		"fileType": fileType, "wasStatus": wasStatus,
 	})
 }
 
@@ -1104,17 +1137,24 @@ func (h *AdminHandler) UpdateTranscodeJob(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, http.StatusBadRequest, "NO_FIELDS", "priority is required")
 		return
 	}
+	// Allow priority change on any non-terminal row. Reordering only takes
+	// effect on the next worker poll, so changing a 'processing' row's
+	// priority doesn't yank a running ffmpeg — it just persists the value
+	// for visibility and applies if the job is restarted.
 	tag, err := h.DB.Exec(r.Context(),
 		`UPDATE transcode_jobs SET priority = $2, updated_at = now()
-		  WHERE id = $1 AND status IN ('pending', 'waiting')`,
+		  WHERE id = $1
+		    AND status NOT IN ('done', 'failed', 'cancelled', 'skipped',
+		                       'failed_quota', 'skipped_quota',
+		                       'skipped_duration_limit', 'skipped_height_limit')`,
 		jobID, *req.Priority)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		httpx.WriteError(w, http.StatusConflict, "NOT_QUEUED",
-			"only pending/waiting jobs can be re-prioritized")
+		httpx.WriteError(w, http.StatusConflict, "TERMINAL",
+			"can't change priority on a job that has already finished")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{

@@ -81,6 +81,27 @@ export default function UsersAdminPage() {
     }
   };
 
+  const setRole = async (u: AdminUser, role: "admin" | "user") => {
+    if (role === u.role) return;
+    const promotingSelf = role === "admin";
+    const verb = promotingSelf ? "promote" : "demote";
+    if (!confirm(
+      `${verb === "promote" ? "Promote" : "Demote"} ${u.email} to ${role}?\n\n` +
+      (role === "admin"
+        ? "Admins can see every user's data, modify system config, and grant or revoke other admins. Only do this for accounts you fully trust."
+        : "Demoting removes all admin privileges from this account. They'll lose access to the admin panel and audit logs.")
+    )) return;
+    try {
+      await api(`/admin/users/${u.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      });
+      void load();
+    } catch (e) {
+      alert(e instanceof ApiError ? e.message : "failed");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -180,6 +201,13 @@ export default function UsersAdminPage() {
                   </td>
                   <td data-label="Created" className="py-2 text-muted text-xs">{formatDate(u.createdAt)}</td>
                   <td data-label="" className="actions py-2 text-right">
+                    <button onClick={() => setRole(u, u.role === "admin" ? "user" : "admin")}
+                            className="text-xs text-muted hover:text-accent mr-3"
+                            title={u.role === "admin"
+                              ? "Demote to regular user — removes all admin privileges"
+                              : "Promote to admin — grants full access to every user's data + system config"}>
+                      {u.role === "admin" ? "demote" : "make admin"}
+                    </button>
                     <button onClick={() => toggleActive(u.id, !u.isActive)}
                             className="text-xs text-muted hover:text-accent mr-2">
                       {u.isActive ? "deactivate" : "activate"}

@@ -75,8 +75,26 @@ func IssueTrustedDevice(r *http.Request, db *pgxpool.Pool, userID uuid.UUID, lab
 	}
 	defer tx.Rollback(r.Context())
 
+	// Dedupe: if THIS browser/device already has a trusted-device row
+	// (matched by user_agent), drop the old one before issuing a new token.
+	// This is the recovery path for users who lost their browser data —
+	// they re-trust the same physical device on next login, and we don't
+	// want a stale "ghost" row sitting in the list eating one of the 3 slots.
+	// We match by user_agent exact-equality. IP would be too brittle (DHCP,
+	// VPN, mobile) and a user-supplied label would be even less reliable.
+	ua := r.UserAgent()
+	if ua != "" {
+		if _, err := tx.Exec(r.Context(),
+			`DELETE FROM trusted_devices WHERE user_id = $1 AND user_agent = $2`,
+			userID, ua,
+		); err != nil {
+			return "", err
+		}
+	}
+
 	// Evict the oldest device first if at cap. Picking by last_used_at
-	// keeps frequently-used devices alive.
+	// keeps frequently-used devices alive. (Runs only when dedupe didn't
+	// already make room.)
 	var count int
 	if err := tx.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM trusted_devices WHERE user_id = $1`, userID,
