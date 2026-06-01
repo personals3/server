@@ -1356,41 +1356,69 @@ function encodeKey(k: string): string {
   return k.split("/").map(encodeURIComponent).join("/");
 }
 
-// Banner shown on the bucket page when isPublic=true. Surfaces the URL
-// pattern + a copy button so the user immediately knows what changed.
+// Banner shown on the bucket page when isPublic=true. Public buckets have
+// TWO useful URLs and the banner surfaces both:
+//
+//   /p/<bucket>/        — friendly file explorer (the dashboard renders it).
+//                          Use this when the audience is humans with browsers.
+//   /public/<bucket>/   — raw API: serves index.html / JSON listing for /,
+//                          raw bytes for /key. Use this in scripts, SDKs, or
+//                          when embedding files (img src, video src, etc).
 function PublicBanner({ bucket }: { bucket: string }) {
-  const [copied, setCopied] = useState(false);
-  const url = typeof window !== "undefined"
-    ? `${window.location.origin}/public/${bucket}/`
-    : `/public/${bucket}/`;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const browseURL = `${origin}/p/${bucket}/`;
+  const apiURL    = `${origin}/public/${bucket}/`;
 
+  return (
+    <div className="bg-warning/10 border border-warning/40 rounded-lg p-3 flex items-start gap-3">
+      <Globe size={16} className="text-warning shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0 space-y-2">
+        <div>
+          <p className="text-xs font-semibold text-warning">This bucket is public.</p>
+          <p className="text-[11px] text-text-soft mt-0.5">
+            Anyone with one of these URLs can read every file in this bucket.
+            No login needed.
+          </p>
+        </div>
+        <PublicURLRow
+          label="Browse online"
+          help="A file explorer anyone can open in a web browser."
+          url={browseURL}
+        />
+        <PublicURLRow
+          label="API / direct"
+          help="Raw listing endpoint. /public/<bucket>/<key> serves bytes for embedding or SDK use."
+          url={apiURL}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PublicURLRow({ label, help, url }: { label: string; help: string; url: string }) {
+  const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
-
   return (
-    <div className="bg-amber-500/10 border border-amber-500/40 rounded p-3 flex items-start gap-3">
-      <Globe size={16} className="text-amber-400 shrink-0 mt-0.5" />
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-amber-200">This bucket is public.</p>
-        <p className="text-[11px] text-amber-300/80 mt-0.5">
-          Anyone with a URL below can read files. No login needed. Root URL
-          serves <span className="font-mono">index.html</span> if present, otherwise a JSON listing.
-        </p>
-        <div className="mt-2 flex items-center gap-2 bg-bg/60 border border-amber-500/20 rounded px-2 py-1">
-          <code className="flex-1 font-mono text-[11px] text-accent truncate" title={url}>
-            {url}
-          </code>
-          <button onClick={copy} className="text-amber-300 hover:text-amber-200 shrink-0" title="Copy">
-            {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-          </button>
-          <a href={url} target="_blank" rel="noreferrer"
-             className="text-amber-300 hover:text-amber-200 shrink-0" title="Open in new tab">
-            <ExternalLink size={12} />
-          </a>
-        </div>
+    <div>
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className="text-[11px] font-semibold text-text">{label}</span>
+        <span className="text-[10px] text-muted">{help}</span>
+      </div>
+      <div className="flex items-center gap-2 bg-bg/60 border border-border-subtle rounded px-2 py-1">
+        <code className="flex-1 font-mono text-[11px] text-accent truncate" title={url}>
+          {url}
+        </code>
+        <button onClick={copy} className="text-muted hover:text-text shrink-0" title="Copy">
+          {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+        </button>
+        <a href={url} target="_blank" rel="noreferrer"
+           className="text-muted hover:text-text shrink-0" title="Open in new tab">
+          <ExternalLink size={12} />
+        </a>
       </div>
     </div>
   );

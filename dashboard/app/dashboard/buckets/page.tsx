@@ -235,11 +235,14 @@ function BucketCard({ bucket: b, onReload }: { bucket: Bucket; onReload: () => v
 
 function PublicLinkCopy({ bucket }: { bucket: string }) {
   const [copied, setCopied] = useState(false);
-  const publicUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/public/${bucket}/`
-    : `/public/${bucket}/`;
+  // Friendly file-explorer URL — what you'd send to a human visitor.
+  // The raw /public/<bucket>/ JSON API URL is shown in the bucket detail
+  // page banner alongside this one, for scripts / direct embedding.
+  const browseURL = typeof window !== "undefined"
+    ? `${window.location.origin}/p/${bucket}/`
+    : `/p/${bucket}/`;
   const copy = () => {
-    navigator.clipboard.writeText(publicUrl);
+    navigator.clipboard.writeText(browseURL);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -247,9 +250,9 @@ function PublicLinkCopy({ bucket }: { bucket: string }) {
     <button
       onClick={copy}
       className="w-full flex items-center justify-between gap-2 text-[11px] text-muted hover:text-text font-mono px-2 py-1 rounded bg-surface hover:bg-codeBg transition-colors truncate"
-      title={`Copy ${publicUrl}`}
+      title={`Copy public browse URL: ${browseURL}`}
     >
-      <span className="truncate">{publicUrl}</span>
+      <span className="truncate">{browseURL}</span>
       {copied ? <Check size={11} className="text-success shrink-0" /> : <Copy size={11} className="shrink-0" />}
     </button>
   );
