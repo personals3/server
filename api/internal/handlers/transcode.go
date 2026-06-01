@@ -261,6 +261,51 @@ func probeVideoHeight(path string) int {
 	return h
 }
 
+// hasRealVideo returns true only if the source contains at least one
+// "real" video stream — i.e. NOT just an `attached_pic` cover-art entry.
+//
+// Music files (.mp3, .m4a, .flac) very commonly carry an MJPEG / PNG album
+// cover encoded as a video stream with disposition.attached_pic=1. ffprobe
+// reports a height for it, so the legacy path went on to build a full HLS
+// ladder around what was effectively a still image. This guard catches
+// that case so cover-art-only sources get the audio pipeline instead.
+//
+// Returns true on probe failure so we never accidentally downgrade a
+// genuine video to audio just because ffprobe stuttered.
+func hasRealVideo(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx,
+		"ffprobe",
+		"-v", "error",
+		"-select_streams", "v",
+		"-show_entries", "stream=codec_type:stream_disposition=attached_pic",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return true // fail open — assume real video
+	}
+	// One stream prints two lines: codec_type, then attached_pic.
+	// We look for any video stream where attached_pic == 0. If every video
+	// stream has attached_pic=1, it's cover-art-only.
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	foundReal := false
+	for i := 0; i+1 < len(lines); i += 2 {
+		// lines[i] = "video", lines[i+1] = "0" or "1"
+		if strings.TrimSpace(lines[i]) == "video" &&
+			strings.TrimSpace(lines[i+1]) == "0" {
+			foundReal = true
+			break
+		}
+	}
+	return foundReal
+}
+
 // probeVideoMeta returns (height_pixels, duration_seconds). Either field is
 // 0 if it couldn't be determined.
 func probeVideoMeta(path string) (int, float64) {
@@ -352,6 +397,17 @@ func insertTranscodeJob(
 
 	switch fileType {
 	case "video":
+		// Audio files (mp3/m4a/flac) routinely carry an attached cover-art
+		// image that ffprobe reports as a video stream. Without this guard
+		// the pipeline encodes the still image as 3 HLS rungs + thumbnails,
+		// wasting CPU/GPU on what should be a one-shot audio transcode.
+		// Detected here once at insert time instead of inside the worker so
+		// the DB shape (file_type column) matches the actual work plan.
+		if !hasRealVideo(inputPath) {
+			insertSingleJob(ctx, db, objectID, inputPath, outputDir,
+				"audio", nil, prioAudio, "pending")
+			break
+		}
 		if !insertVideoPipeline(ctx, db, objectID, bucketID, inputPath, outputDir) {
 			return // skipped (quota); status already set to skipped_quota
 		}
