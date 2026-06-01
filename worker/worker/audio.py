@@ -15,13 +15,29 @@ def transcode_audio(input_path: str, output_dir: str, job_id: str | None = None)
     probe = ffprobe(input_path)
     duration = float(probe.get("format", {}).get("duration", 0))
 
-    # HLS audio (for browser streaming)
+    # HLS audio for streaming-mode playback.
+    #
+    # -hls_time 4: 4-second segments. Shorter than the usual 10s because:
+    #   - First-byte-to-first-sample latency = ~ one segment.
+    #     Long audio (audiobook, concert) starts ~6s sooner with 4s segments.
+    #   - Segments are tiny (~65 KB at 128 kbps) — small enough that re-fetching
+    #     after a network blip is cheap.
+    #   - HLS recommendation for VOD is 6s; 4s is on the aggressive side but
+    #     still well within player tolerance.
+    # -hls_list_size 0 + -hls_playlist_type vod: complete playlist, all segments
+    #   listed, browser can seek anywhere immediately.
+    # -map 0:a:0: pick the FIRST audio stream explicitly. Cover-art-only files
+    #   reach this code path via hasRealVideo() routing on the API side, so
+    #   we shouldn't see them, but being explicit is cheap insurance against
+    #   accidentally picking an attached_pic video stream.
     run([
         "ffmpeg", "-y", "-i", input_path,
-        "-vn",                           # no video
+        "-map", "0:a:0",
+        "-vn",                           # belt + suspenders: no video out
         "-c:a", "aac", "-b:a", "128k",
         "-f", "hls",
-        "-hls_time", "10",
+        "-hls_time", "4",
+        "-hls_list_size", "0",
         "-hls_playlist_type", "vod",
         "-hls_segment_filename", os.path.join(output_dir, "audio_%03d.aac"),
         os.path.join(output_dir, "audio.m3u8"),
