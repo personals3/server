@@ -1,11 +1,18 @@
 # =============================================================================
 # Python transcoding worker — FFmpeg + Pillow
 #
-# We use the official python:3.12-slim base and install ffmpeg from Debian.
-# Debian's ffmpeg includes libx264, AAC, libmp3lame, libvorbis, and libaom-av1.
+# We use the official python:3.12-slim-bookworm base and install ffmpeg from
+# Debian. Debian's ffmpeg includes libx264, AAC, libmp3lame, libvorbis, and
+# libaom-av1.
+#
+# IMPORTANT: pinned to bookworm intentionally. Trixie ships ffmpeg 7.1.x
+# built with libplacebo, whose SIMD dispatcher segfaults on pre-AVX2 CPUs
+# (AMD Mullins/Beema/Puma+ — e.g. A6-7310, our current host). Bookworm's
+# ffmpeg 5.1.x runs fine on the same hardware. When the host moves to a
+# mainstream AMD/Intel CPU with AVX2, this can go back to plain `slim`.
 # =============================================================================
 
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 # System deps: ffmpeg + libaom (AV1/AVIF) + image libs Pillow needs.
 # Plus VA-API for hardware video encoding on Intel iGPU / AMD APU.
@@ -16,8 +23,8 @@ FROM python:3.12-slim
 #   - mesa-va-drivers        — AMD / AMDGPU
 #
 # We install drivers in a second pass so any missing package doesn't fail
-# the whole layer. Package name on Debian trixie dropped the "-non-free"
-# suffix; bookworm and older still have "intel-media-va-driver-non-free".
+# the whole layer. The loop tries both `-non-free` and plain names so it
+# keeps working across Debian releases.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         libjpeg62-turbo \

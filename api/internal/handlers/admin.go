@@ -13,8 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/personals3/api/internal/auth"
+	"github.com/personals3/api/internal/cache"
 	"github.com/personals3/api/internal/httpx"
 	"github.com/personals3/api/internal/middleware"
 	"github.com/personals3/api/internal/storage"
@@ -23,6 +25,8 @@ import (
 
 type AdminHandler struct {
 	DB          *pgxpool.Pool
+	RDB         *redis.Client
+	FS          *storage.FS
 	StorageRoot string
 }
 
@@ -988,5 +992,178 @@ func (h *AdminHandler) QuotaEventsHistory(w http.ResponseWriter, r *http.Request
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"events": out, "total": total, "limit": limit, "offset": offset,
+	})
+}
+
+// ============================================================================
+// TRANSCODE JOB CONTROL
+//
+// Admins need a way to intervene on stuck/failed/running transcode jobs
+// without dropping to psql or docker exec. The three primitives below
+// cover the realistic operator workflow:
+//
+//   DELETE /admin/transcode-jobs/{id}      → kill one job NOW
+//   POST   /admin/transcode-jobs/{id}/retry → reset attempts, mark pending
+//   PATCH  /admin/transcode-jobs/{id}      → re-prioritize (move up/down in queue)
+//
+// Plus a higher-level operation to retry an entire object's pipeline:
+//
+//   POST   /admin/objects/{id}/retry-transcode → wipe + re-queue every rung
+//
+// All four go through AdminOnly so a regular user can't pretend to be the
+// owner of someone else's object.
+// ============================================================================
+
+// DELETE /admin/transcode-jobs/{id} — cancel one job.
+// Publishes a cancel to any worker holding the ffmpeg PID, then deletes
+// the row. The worker also notices the missing row on the next progress
+// check and exits ffmpeg as a fallback.
+func (h *AdminHandler) CancelTranscodeJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_ID", "invalid uuid")
+		return
+	}
+	// Look up the row first so we can tell the worker to stop AND so we
+	// can return a useful "what did we just kill" body to the admin.
+	var objectID uuid.UUID
+	var fileType, status string
+	err = h.DB.QueryRow(r.Context(),
+		`SELECT object_id, file_type, status FROM transcode_jobs WHERE id = $1`, jobID,
+	).Scan(&objectID, &fileType, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpx.WriteError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	cache.PublishCancelJob(r.Context(), h.RDB, jobID, "admin cancel")
+	if _, err := h.DB.Exec(r.Context(),
+		`DELETE FROM transcode_jobs WHERE id = $1`, jobID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"cancelled": true, "jobId": jobID, "objectId": objectID,
+		"fileType": fileType, "wasStatus": status,
+	})
+}
+
+// POST /admin/transcode-jobs/{id}/retry — reset to pending, attempts=0.
+// Doesn't trigger anything actively; the next worker poll picks it up.
+func (h *AdminHandler) RetryTranscodeJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_ID", "invalid uuid")
+		return
+	}
+	tag, err := h.DB.Exec(r.Context(), `
+		UPDATE transcode_jobs
+		   SET status = 'pending',
+		       attempts = 0,
+		       progress_pct = 0,
+		       error = NULL,
+		       started_at = NULL,
+		       done_at = NULL,
+		       updated_at = now()
+		 WHERE id = $1`, jobID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		httpx.WriteError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"retried": true, "jobId": jobID})
+}
+
+// PATCH /admin/transcode-jobs/{id} — change priority. Body: {"priority": int}.
+// Lower number = higher priority (workers ORDER BY priority ASC). Only
+// pending/waiting jobs get re-prioritized — touching processing/done/failed
+// is meaningless.
+func (h *AdminHandler) UpdateTranscodeJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_ID", "invalid uuid")
+		return
+	}
+	var req struct {
+		Priority *int `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_JSON", err.Error())
+		return
+	}
+	if req.Priority == nil {
+		httpx.WriteError(w, http.StatusBadRequest, "NO_FIELDS", "priority is required")
+		return
+	}
+	tag, err := h.DB.Exec(r.Context(),
+		`UPDATE transcode_jobs SET priority = $2, updated_at = now()
+		  WHERE id = $1 AND status IN ('pending', 'waiting')`,
+		jobID, *req.Priority)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		httpx.WriteError(w, http.StatusConflict, "NOT_QUEUED",
+			"only pending/waiting jobs can be re-prioritized")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"updated": true, "jobId": jobID, "priority": *req.Priority,
+	})
+}
+
+// POST /admin/objects/{id}/retry-transcode — rebuild a whole pipeline.
+// Mirrors the user-facing POST /:bucket/*?transcode, but works on any
+// object regardless of owner. Used when a failed pipeline has eaten its
+// retries (3 attempts each) and the admin wants a fresh start.
+//
+// Wired to insertTranscodeJob (the same helper the user endpoint calls)
+// so transcode limits, file-type detection, and quota checks all behave
+// identically.
+func (h *AdminHandler) RetryObjectTranscode(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	objectID, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_ID", "invalid uuid")
+		return
+	}
+	var bucketID uuid.UUID
+	var key, contentType string
+	err = h.DB.QueryRow(r.Context(),
+		`SELECT bucket_id, key, content_type
+		   FROM objects WHERE id = $1 AND NOT is_deleted`,
+		objectID,
+	).Scan(&bucketID, &key, &contentType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpx.WriteError(w, http.StatusNotFound, "NOT_FOUND", "object not found or deleted")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	ft := detectFileType(contentType, key)
+	if ft == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "NOT_MEDIA",
+			"this file isn't a recognized video/audio/image type")
+		return
+	}
+	// Same atomic-cancel-then-re-insert dance as the user endpoint.
+	_, _ = h.DB.Exec(r.Context(),
+		`DELETE FROM transcode_jobs WHERE object_id = $1`, objectID)
+	cache.PublishCancelObject(r.Context(), h.RDB, objectID, "admin retry")
+	insertTranscodeJob(r.Context(), h.DB, h.FS, objectID, bucketID, key, ft)
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{
+		"objectId": objectID, "key": key, "fileType": ft, "status": "pending",
 	})
 }

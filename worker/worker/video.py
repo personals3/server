@@ -67,13 +67,26 @@ HAS_VAAPI = _probe_vaapi()
 # ----- helpers --------------------------------------------------------------
 
 def ffprobe(path: str) -> dict:
+    # -v error keeps stdout JSON-clean while routing the ACTUAL failure
+    # reason (missing file, codec mismatch, truncated mp4, etc) to stderr.
+    # We hand-check returncode so we can attach stderr to the exception —
+    # the old `check=True` raised a CalledProcessError whose str() only
+    # showed the command + exit code, hiding the useful bit.
     out = subprocess.run(
-        ["ffprobe", "-v", "quiet",
+        ["ffprobe", "-v", "error",
          "-print_format", "json",
          "-show_format", "-show_streams",
          path],
-        capture_output=True, check=True,
+        capture_output=True, check=False,
     )
+    if out.returncode != 0:
+        stderr = out.stderr.decode("utf-8", errors="replace").strip()
+        # Include path so the DB row in transcode_jobs.error tells the operator
+        # exactly which file ffprobe failed on, not just the command shape.
+        raise RuntimeError(
+            f"ffprobe exit {out.returncode} on {path}: "
+            f"{stderr or '<no stderr>'}"
+        )
     return json.loads(out.stdout)
 
 

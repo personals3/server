@@ -100,11 +100,11 @@ func main() {
 	bucketH := &handlers.BucketHandler{DB: pool, FS: fs}
 	objectH := &handlers.ObjectHandler{DB: pool, FS: fs, RDB: rdb}
 	mpH := &handlers.MultipartHandler{DB: pool, FS: fs}
-	adminH := &handlers.AdminHandler{DB: pool, StorageRoot: cfg.StorageRoot}
+	adminH := &handlers.AdminHandler{DB: pool, RDB: rdb, FS: fs, StorageRoot: cfg.StorageRoot}
 	cleanupH := &handlers.CleanupHandler{DB: pool, StorageRoot: cfg.StorageRoot}
 	shardH := &handlers.ShardHandler{DB: pool}
 	searchH := &handlers.SearchHandler{DB: pool}
-	sharesH := &handlers.SharesHandler{DB: pool}
+	sharesH := &handlers.SharesHandler{DB: pool, JWTSecret: cfg.JWTSecret}
 	s3CredsH := &handlers.S3CredsHandler{DB: pool}
 	importH := &handlers.ImportHandler{DB: pool}
 	shareH := &handlers.ShareHandler{DB: pool, FS: fs, JWTSecret: cfg.JWTSecret, MP: mpH}
@@ -324,6 +324,12 @@ func main() {
 			r.Get("/quota-events",         adminH.QuotaEvents)        // SSE — live quota stream
 			r.Get("/quota-events/history", adminH.QuotaEventsHistory) // paginated history
 			r.Get("/transcode-jobs",       adminH.TranscodeJobs)
+
+			// Operator control over running transcode work
+			r.Delete("/transcode-jobs/{id}",       adminH.CancelTranscodeJob)
+			r.Post("/transcode-jobs/{id}/retry",   adminH.RetryTranscodeJob)
+			r.Patch("/transcode-jobs/{id}",        adminH.UpdateTranscodeJob)
+			r.Post("/objects/{id}/retry-transcode", adminH.RetryObjectTranscode)
 
 			// Onboarding queue
 			r.Get("/requests",                            requestsH.List)

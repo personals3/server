@@ -416,25 +416,65 @@ function TranscodePanel() {
   const [live, setLive]     = useState(true);
   const [limit, setLimit]   = useState(DEFAULT_PAGE_SIZE);
   const [offset, setOffset] = useState(0);
+  const [busy, setBusy]     = useState<string | null>(null);
+
+  const load = () => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    void api<{ jobs: TranscodeJob[]; total: number }>(`/admin/transcode-jobs?${q}`).then((r) => {
+      setJobs(r.jobs);
+      setTotal(r.total);
+    });
+  };
 
   useEffect(() => {
-    const load = () => {
-      const q = new URLSearchParams();
-      if (status) q.set("status", status);
-      q.set("limit", String(limit));
-      q.set("offset", String(offset));
-      void api<{ jobs: TranscodeJob[]; total: number }>(`/admin/transcode-jobs?${q}`).then((r) => {
-        setJobs(r.jobs);
-        setTotal(r.total);
-      });
-    };
     load();
     if (!live) return;
     const id = setInterval(load, 4000);
     return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, live, limit, offset]);
 
   useEffect(() => { setOffset(0); }, [status, limit]);
+
+  // Admin actions — kill / retry / re-pipeline / nudge priority.
+  // We mark the row busy by id while the request is in flight so the user
+  // can't fire the same action twice or trigger races against each other.
+  const act = async (id: string, fn: () => Promise<unknown>, successMsg: string) => {
+    setBusy(id);
+    try {
+      await fn();
+      // Force a fresh poll so the row's new state shows up immediately
+      // (without waiting for the 4s tick).
+      load();
+      // toast-style inline notice — we don't have a toast in this panel,
+      // so reach for an alert only on failure. Success is visible in the
+      // refreshed row.
+      void successMsg;
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "action failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const killJob = (j: TranscodeJob) => {
+    if (!confirm(`Kill ${j.fileType} job for ${j.bucket}/${j.key}? Worker will SIGTERM ffmpeg.`)) return;
+    void act(j.id, () => api(`/admin/transcode-jobs/${j.id}`, { method: "DELETE" }), "killed");
+  };
+  const retryJob = (j: TranscodeJob) =>
+    act(j.id, () => api(`/admin/transcode-jobs/${j.id}/retry`, { method: "POST" }), "retried");
+  const retryWholePipeline = (j: TranscodeJob) => {
+    if (!confirm(`Wipe and re-queue ALL rungs for ${j.bucket}/${j.key}? This cancels every job in this object's pipeline and starts from scratch.`)) return;
+    void act(j.id, () => api(`/admin/objects/${j.objectId}/retry-transcode`, { method: "POST" }), "pipeline restarted");
+  };
+  const bumpPriority = (j: TranscodeJob, delta: number) =>
+    act(j.id, () => api(`/admin/transcode-jobs/${j.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ priority: j.priority + delta }),
+    }), "priority changed");
 
   return (
     <PanelCard>
@@ -466,11 +506,19 @@ function TranscodePanel() {
               <th className="px-2 py-2 font-semibold">Bucket / Key</th>
               <th className="px-2 py-2 font-semibold">Status</th>
               <th className="px-2 py-2 font-semibold">Attempt</th>
-              <th className="px-4 py-2 font-semibold">Progress / Error</th>
+              <th className="px-2 py-2 font-semibold">Prio</th>
+              <th className="px-2 py-2 font-semibold">Progress / Error</th>
+              <th className="px-4 py-2 font-semibold text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {jobs.map((j) => (
+            {jobs.map((j) => {
+              const isBusy = busy === j.id;
+              const isQueued    = j.status === "pending" || j.status === "waiting";
+              const isRunning   = j.status === "processing";
+              const isFailed    = j.status === "failed" || j.status === "failed_quota";
+              const isDone      = j.status === "done";
+              return (
               <tr key={j.id} className="border-b border-border/40 hover:bg-bg/50">
                 <td className="px-4 py-1.5 text-muted whitespace-nowrap font-mono text-[11px]">{formatDate(j.createdAt)}</td>
                 <td className="px-2 py-1.5 font-mono text-muted text-[11px]">{j.fileType}</td>
@@ -479,23 +527,71 @@ function TranscodePanel() {
                 </td>
                 <td className="px-2 py-1.5"><StatusPill variant={transcodeVariant(j.status)}>{j.status}</StatusPill></td>
                 <td className="px-2 py-1.5 text-muted text-[11px]">{j.attempts}</td>
-                <td className="px-4 py-1.5 text-muted text-[11px]">
-                  {j.status === "processing" && (
-                    <div className="flex items-center gap-2 max-w-[28ch]">
+                <td className="px-2 py-1.5 text-muted text-[11px] font-mono">{j.priority}</td>
+                <td className="px-2 py-1.5 text-muted text-[11px]">
+                  {isRunning && (
+                    <div className="flex items-center gap-2 max-w-[24ch]">
                       <div className="flex-1 h-1 bg-bg rounded-full overflow-hidden">
                         <div className="h-full bg-accent transition-all" style={{ width: `${j.progressPct}%` }} />
                       </div>
                       <span className="font-mono text-[10px]">{j.progressPct}%</span>
                     </div>
                   )}
-                  {j.error && j.status !== "processing" && (
-                    <span className="text-danger truncate" title={j.error}>{j.error.slice(0, 60)}</span>
+                  {j.error && !isRunning && (
+                    <span className="text-danger truncate inline-block max-w-[28ch]" title={j.error}>{j.error.slice(0, 60)}</span>
                   )}
                 </td>
+                <td className="px-4 py-1.5 text-right whitespace-nowrap">
+                  <div className="inline-flex items-center gap-1 text-[10px]">
+                    {isQueued && (
+                      <>
+                        <button
+                          disabled={isBusy}
+                          onClick={() => bumpPriority(j, -1)}
+                          className="px-1.5 py-0.5 rounded border border-border text-muted hover:text-text hover:border-text/40 disabled:opacity-30"
+                          title="Higher priority (lower number = sooner)"
+                        >↑</button>
+                        <button
+                          disabled={isBusy}
+                          onClick={() => bumpPriority(j, 1)}
+                          className="px-1.5 py-0.5 rounded border border-border text-muted hover:text-text hover:border-text/40 disabled:opacity-30"
+                          title="Lower priority"
+                        >↓</button>
+                      </>
+                    )}
+                    {(isFailed) && (
+                      <button
+                        disabled={isBusy}
+                        onClick={() => retryJob(j)}
+                        className="px-1.5 py-0.5 rounded border border-border text-link hover:border-link/40 disabled:opacity-30"
+                        title="Reset attempts to 0 — worker picks up on next poll"
+                      >Retry</button>
+                    )}
+                    {(isRunning || isQueued) && (
+                      <button
+                        disabled={isBusy}
+                        onClick={() => killJob(j)}
+                        className="px-1.5 py-0.5 rounded border border-border text-danger hover:border-danger/40 disabled:opacity-30"
+                        title={isRunning
+                          ? "Kill this job — SIGTERM the ffmpeg subprocess + remove the row"
+                          : "Remove this queued job from the pipeline"}
+                      >Kill</button>
+                    )}
+                    {(isFailed || isDone) && (
+                      <button
+                        disabled={isBusy}
+                        onClick={() => retryWholePipeline(j)}
+                        className="px-1.5 py-0.5 rounded border border-border text-muted hover:text-text hover:border-text/40 disabled:opacity-30"
+                        title="Wipe + re-queue every rung for this object (any owner)"
+                      >Re-pipeline</button>
+                    )}
+                  </div>
+                </td>
               </tr>
-            ))}
+              );
+            })}
             {jobs.length === 0 && (
-              <tr><td colSpan={6} className="py-10 text-center text-muted italic text-xs">no jobs match</td></tr>
+              <tr><td colSpan={8} className="py-10 text-center text-muted italic text-xs">no jobs match</td></tr>
             )}
           </tbody>
         </table>

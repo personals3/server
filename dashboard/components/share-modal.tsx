@@ -55,7 +55,7 @@ export function ShareModal({ bucket, objectKey, onClose }: Props) {
       setUrl(absolute);
       setExpiresAt(r.expiresAt);
       toast.push("success", linkType === "PUT"
-        ? "Upload link ready — anyone with this URL can PUT a file to this key."
+        ? "Upload link ready — anyone with this URL can upload a file to this key."
         : "Share link ready — copy it below.");
     } catch (e) {
       toast.push("error", e instanceof ApiError ? e.message : "failed");
@@ -98,26 +98,25 @@ export function ShareModal({ bucket, objectKey, onClose }: Props) {
                   : "bg-bg border-border hover:border-muted"
               }`}
             >
-              Download (GET)
+              Download
             </button>
             <button
               onClick={() => setLinkType("PUT")}
               className={`px-3 py-1.5 text-xs rounded border transition ${
                 linkType === "PUT"
-                  ? "bg-amber-500 border-amber-500 text-white"
+                  ? "bg-warning border-warning text-white"
                   : "bg-bg border-border hover:border-muted"
               }`}
-              title="Anyone with the URL can PUT a file to this exact key"
+              title="Anyone with the URL can upload a file to this exact key"
             >
-              Upload (PUT)
+              Upload
             </button>
           </div>
-          {linkType === "PUT" && (
-            <p className="text-[10px] text-amber-300 mt-1">
-              ⚠ Anyone with the URL can write any bytes to <code className="font-mono">{objectKey}</code>.
-              Use one-shot uploads only — short expiry recommended.
-            </p>
-          )}
+          <p className="text-[10px] text-muted mt-1">
+            {linkType === "PUT"
+              ? <>Anyone with this URL can replace <code className="font-mono">{objectKey}</code>. Keep the expiry short.</>
+              : <>Anyone with this URL can read the file — no login needed.</>}
+          </p>
         </div>
 
         <div>

@@ -3,7 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/personals3/api/internal/auth"
 	"github.com/personals3/api/internal/httpx"
 	"github.com/personals3/api/internal/middleware"
 )
@@ -18,7 +23,8 @@ import (
 // SharesHandler is /shares — list / extend / revoke presigned URLs owned
 // by the calling user.
 type SharesHandler struct {
-	DB *pgxpool.Pool
+	DB        *pgxpool.Pool
+	JWTSecret string // used to RECONSTRUCT signed URLs on list
 }
 
 type shareDTO struct {
@@ -33,33 +39,48 @@ type shareDTO struct {
 	CreatedAt     time.Time  `json:"createdAt"`
 	LastUsedAt    *time.Time `json:"lastUsedAt,omitempty"`
 	UseCount      int        `json:"useCount"`
-	Expired       bool       `json:"expired"`   // computed: ExpiresAt < now
-	Active        bool       `json:"active"`    // !Revoked && !Expired
+	Expired       bool       `json:"expired"` // computed: ExpiresAt < now
+	Active        bool       `json:"active"`  // !Revoked && !Expired
+	// URL is the signed share URL, recomputed from the stored fields on
+	// every read. The sig is HMAC of (secret, method, bucket, key, expires)
+	// so given those fields it's deterministic — letting the dashboard
+	// surface "copy this link again" without storing the URL client-side
+	// after the create modal closes. Empty when the row predates the
+	// reconstruction path (we just leave it blank in that case).
+	URL string `json:"url,omitempty"`
 }
 
 // GET /shares — list this user's share links.
-// Query: ?active=1 to only show active (default = all)
-//        ?bucket=X to filter
+// Query:
+//   ?active=1     — only show active (default = all)
+//   ?bucket=X     — filter to one bucket
+//   ?key=X        — filter to one object key (typically combined with ?bucket=)
+//
+// The (bucket, key) filter is what the bucket-detail file preview uses to
+// pull just the shares for the file you've selected, so we can show + revoke
+// them inline without a round-trip to the dedicated /shares page.
 func (h *SharesHandler) List(w http.ResponseWriter, r *http.Request) {
 	u := middleware.MustUser(r.Context())
 	q := r.URL.Query()
 
 	clauses := []string{"owner_id = $1"}
 	args := []any{u.ID}
+	addArg := func(clauseFmt string, val any) {
+		args = append(args, val)
+		clauses = append(clauses, fmt.Sprintf(clauseFmt, len(args)))
+	}
 	if q.Get("active") == "1" {
 		clauses = append(clauses, "NOT revoked AND expires_at > now()")
 	}
 	if b := q.Get("bucket"); b != "" {
-		args = append(args, b)
-		clauses = append(clauses, "bucket_name = $2")
+		addArg("bucket_name = $%d", b)
 	}
-	where := ""
-	for i, c := range clauses {
-		if i == 0 {
-			where = " WHERE " + c
-		} else {
-			where += " AND " + c
-		}
+	if k := q.Get("key"); k != "" {
+		addArg("object_key = $%d", k)
+	}
+	where := " WHERE " + clauses[0]
+	for _, c := range clauses[1:] {
+		where += " AND " + c
 	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, bucket_name, object_key, method, expires_at, force_download,
@@ -86,6 +107,14 @@ func (h *SharesHandler) List(w http.ResponseWriter, r *http.Request) {
 		s.RevokedAt = revokedAt
 		s.LastUsedAt = lastUsedAt
 		s.Expired = s.ExpiresAt.Before(now)
+		// Reconstruct the share URL so the dashboard can offer "copy" on
+		// the row even after the create modal closed. Only emit it when
+		// the link is still usable — revoked/expired links shouldn't tempt
+		// anyone to re-share them.
+		if h.JWTSecret != "" && !s.Revoked && !s.Expired {
+			s.URL = buildShareURL(h.JWTSecret, s.Bucket, s.Key, s.Method,
+				s.ExpiresAt.Unix(), s.ForceDownload)
+		}
 		s.Active = !s.Revoked && !s.Expired
 		out = append(out, s)
 	}
@@ -197,3 +226,26 @@ func (h *SharesHandler) RevokeAll(w http.ResponseWriter, r *http.Request) {
 // keep pgx import live in case ErrNoRows checks land here later
 var _ = pgx.ErrNoRows
 var _ = errors.Is
+
+// buildShareURL recreates the same /share/<bucket>/<key>?sig=...&expires=...
+// URL the create endpoint emits, given only the stored fields. The HMAC
+// signature is deterministic in (secret, method, bucket, key, expires), so
+// every list request produces the same URL — no per-request randomness, no
+// drift if someone copies an older list response.
+func buildShareURL(secret, bucket, key, method string, expiresUnix int64, download bool) string {
+	sig := auth.SignPresignedURL(secret, method, bucket, key, expiresUnix)
+	urlPath := "/share/" + url.PathEscape(bucket)
+	for _, seg := range strings.Split(key, "/") {
+		urlPath += "/" + url.PathEscape(seg)
+	}
+	q := make(url.Values)
+	q.Set("sig", sig)
+	q.Set("expires", strconv.FormatInt(expiresUnix, 10))
+	if method != "GET" {
+		q.Set("method", method)
+	}
+	if download {
+		q.Set("download", "1")
+	}
+	return urlPath + "?" + q.Encode()
+}

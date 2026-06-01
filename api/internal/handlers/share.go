@@ -418,6 +418,14 @@ func (h *ShareHandler) ServePresigned(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("ETag", `"`+etag+`"`)
 	w.Header().Set("Accept-Ranges", "bytes")
+	// Share URLs are revocable, so the browser can NEVER cache the response.
+	// Without this, a user who revokes a link finds the same browser tab still
+	// serving the file from disk cache on refresh until they clear it. The
+	// triplet covers HTTP/1.0 (Pragma), HTTP/1.1 cache directives, and the
+	// proxy-side hint via Expires=0.
+	w.Header().Set("Cache-Control", "no-store, private, max-age=0, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	if q.Get("download") == "1" {
 		// Force browser to download instead of inline render
 		filename := key

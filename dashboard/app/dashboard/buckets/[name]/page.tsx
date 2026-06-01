@@ -331,7 +331,7 @@ export default function BucketPage() {
       </Card>
 
       {selected && (
-        <PreviewCard bucket={name} obj={selected} versioning={versioning} onClose={() => setSelected(null)} onReload={() => void load()} />
+        <PreviewCard bucket={name} obj={selected} versioning={versioning} isPublic={isPublic} onClose={() => setSelected(null)} onReload={() => void load()} />
       )}
 
       {/* File list — toolbar + list. */}
@@ -642,10 +642,11 @@ interface PipelineJob {
   error?: string;
 }
 
-function PreviewCard({ bucket, obj, versioning, onClose, onReload }: {
+function PreviewCard({ bucket, obj, versioning, isPublic, onClose, onReload }: {
   bucket: string;
   obj: ObjectDetail;
   versioning: boolean;
+  isPublic: boolean;
   onClose: () => void;
   onReload: () => void;
 }) {
@@ -654,8 +655,21 @@ function PreviewCard({ bucket, obj, versioning, onClose, onReload }: {
   const [actionPending, setActionPending] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  // Bump this to force the inline shares list to re-fetch — e.g. right after
+  // the ShareModal closes so a freshly-created link shows up immediately
+  // instead of waiting for the next poll tick.
+  const [sharesNonce, setSharesNonce] = useState(0);
   const kind = classify(obj.key, obj.contentType);
   const toast = useToast();
+  const publicURL = typeof window !== "undefined"
+    ? `${window.location.origin}/public/${bucket}/${obj.key.split("/").map(encodeURIComponent).join("/")}`
+    : `/public/${bucket}/${obj.key}`;
+  const [publicCopied, setPublicCopied] = useState(false);
+  const copyPublic = () => {
+    navigator.clipboard.writeText(publicURL);
+    setPublicCopied(true);
+    setTimeout(() => setPublicCopied(false), 1500);
+  };
 
   // Server-side POST ?transcode now atomically cancels any existing pipeline
   // before queuing the new one, so we don't need a DELETE first (which had
@@ -798,6 +812,16 @@ function PreviewCard({ bucket, obj, versioning, onClose, onReload }: {
           >
             <Share2 size={12} /> Share link
           </button>
+          {isPublic && (
+            <button
+              onClick={copyPublic}
+              className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+              title={`Copy ${publicURL}`}
+            >
+              {publicCopied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+              {publicCopied ? "Copied" : "Copy public link"}
+            </button>
+          )}
           {versioning && (
             <button
               onClick={() => setVersionsOpen(true)}
@@ -814,9 +838,14 @@ function PreviewCard({ bucket, obj, versioning, onClose, onReload }: {
         <ShareModal
           bucket={bucket}
           objectKey={obj.key}
-          onClose={() => setShareOpen(false)}
+          onClose={() => { setShareOpen(false); setSharesNonce((n) => n + 1); }}
         />
       )}
+
+      {/* Active share links for this file — copy + revoke inline.
+          Hides when there are zero active links so the preview stays clean
+          for the common case. */}
+      <ActiveSharesBar bucket={bucket} objectKey={obj.key} reloadNonce={sharesNonce} />
       {versionsOpen && (
         <VersionsModal
           bucket={bucket}
@@ -942,6 +971,141 @@ function PreviewCard({ bucket, obj, versioning, onClose, onReload }: {
         <p className="text-sm text-muted">No preview available. Use Download to get the file.</p>
       )}
     </Card>
+  );
+}
+
+/**
+ * Lists ACTIVE share links for one file, inline under the preview, with
+ * copy + revoke buttons. Hides itself when there are no active links so
+ * the preview stays clean for the common case.
+ *
+ * Server-side, GET /shares supports ?bucket=X&key=Y filtering — we use that
+ * so the list never includes shares for OTHER files in the same bucket.
+ *
+ * reloadNonce is a re-fetch trigger the parent bumps after creating a new
+ * link in ShareModal, so the row appears immediately without waiting for
+ * the next polling tick.
+ */
+function ActiveSharesBar({ bucket, objectKey, reloadNonce }: {
+  bucket: string;
+  objectKey: string;
+  reloadNonce: number;
+}) {
+  interface Share {
+    id: string;
+    method: "GET" | "HEAD" | "PUT";
+    expiresAt: string;
+    forceDownload: boolean;
+    createdAt: string;
+    useCount: number;
+    url: string; // server reconstructs deterministically from stored fields
+  }
+  const toast = useToast();
+  const [shares, setShares] = useState<Share[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    const qs = new URLSearchParams({
+      active: "1", bucket, key: objectKey,
+    });
+    void api<{ shares: Share[] }>(`/shares?${qs}`)
+      .then((r) => setShares(r.shares || []))
+      .catch(() => setShares([]));
+  }, [bucket, objectKey]);
+
+  useEffect(() => {
+    load();
+    // Refresh every 15s so an expiry roll-off auto-removes a row.
+    const t = window.setInterval(load, 15000);
+    return () => window.clearInterval(t);
+  }, [load, reloadNonce]);
+
+  const revoke = async (s: Share) => {
+    if (!confirm("Revoke this share link? Anyone holding the URL will start getting 403 on refresh.")) return;
+    setBusy(true);
+    try {
+      await api(`/shares/${s.id}`, { method: "DELETE" });
+      toast.push("success", "Share link revoked.");
+      load();
+    } catch (e) {
+      toast.push("error", e instanceof Error ? e.message : "revoke failed");
+    } finally { setBusy(false); }
+  };
+
+  if (shares.length === 0) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border-subtle">
+      <p className="text-[10px] uppercase tracking-wider text-muted mb-2">
+        Active share links · {shares.length}
+      </p>
+      <div className="space-y-1.5">
+        {shares.map((s) => (
+          <ShareRow key={s.id} share={s}
+                    onRevoke={() => revoke(s)} disabled={busy} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ShareRow({ share: s, onRevoke, disabled }: {
+  share: { id: string; method: string; expiresAt: string; forceDownload: boolean; useCount: number; url: string };
+  onRevoke: () => void;
+  disabled: boolean;
+}) {
+  // The server reconstructs the signed URL on every list response so we can
+  // offer "copy this link again" without storing it client-side after the
+  // create modal closes (which is the whole reason the user asked for this).
+  const [copied, setCopied] = useState(false);
+  const absoluteURL = typeof window !== "undefined" && s.url
+    ? new URL(s.url, window.location.origin).toString()
+    : s.url;
+  const copy = () => {
+    if (!absoluteURL) return;
+    navigator.clipboard.writeText(absoluteURL);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const expiresAt = new Date(s.expiresAt);
+  const remaining = expiresAt.getTime() - Date.now();
+  const hrs = Math.max(0, Math.round(remaining / 3_600_000));
+  const days = Math.round(hrs / 24);
+  const remainingLabel =
+    hrs < 1   ? "<1h left" :
+    hrs < 48  ? `${hrs}h left` :
+                `${days}d left`;
+  return (
+    <div className="flex items-center gap-2 text-xs bg-bg/40 border border-border-subtle rounded px-2.5 py-1.5">
+      <Badge variant={s.method === "PUT" ? "warning" : "accent"}>
+        {s.method === "PUT" ? "Upload" : s.forceDownload ? "Download" : "View"}
+      </Badge>
+      <code className="flex-1 min-w-0 truncate font-mono text-[10px] text-muted" title={absoluteURL}>
+        {absoluteURL || "URL unavailable (legacy link)"}
+      </code>
+      <span className="text-muted text-[10px] whitespace-nowrap">{remainingLabel}</span>
+      <span className="text-muted text-[10px] whitespace-nowrap">· {s.useCount} {s.useCount === 1 ? "hit" : "hits"}</span>
+      {absoluteURL && (
+        <>
+          <button onClick={copy} className="text-muted hover:text-text shrink-0" title="Copy link">
+            {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+          </button>
+          <a href={absoluteURL} target="_blank" rel="noreferrer"
+             className="text-muted hover:text-text shrink-0" title="Open in new tab">
+            <ExternalLink size={12} />
+          </a>
+        </>
+      )}
+      <button
+        onClick={onRevoke}
+        disabled={disabled}
+        className="text-danger hover:underline disabled:opacity-50 shrink-0"
+        title="Revoke — anyone holding the URL will get 403"
+      >
+        Revoke
+      </button>
+    </div>
   );
 }
 
