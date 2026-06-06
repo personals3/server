@@ -280,15 +280,20 @@ func (h *BucketHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 
 	if force {
 		// For quota refund we need EVERY byte still on disk for this bucket:
-		//   - live objects
-		//   - soft-deleted objects sitting in trash (is_deleted=true)
+		//   - live objects (size_bytes + transcoded HLS + pre-flight reservation)
+		//   - soft-deleted objects sitting in trash (is_deleted=true) — same shape
 		//   - every prior version under object_versions
 		// CASCADE will wipe all three when the bucket row is dropped, so the
 		// only way the user's quota stays correct is if we subtract them now.
+		// Missing transcoded_bytes here is what caused "bucket empty but
+		// used_bytes high" drift after force-deleting buckets with HLS content.
 		var totalRefund int64
 		err = h.DB.QueryRow(r.Context(), `
 			SELECT
-			  COALESCE((SELECT SUM(size_bytes) FROM objects
+			  COALESCE((SELECT SUM(size_bytes
+			                       + COALESCE(transcoded_bytes, 0)
+			                       + COALESCE(transcode_reserved_bytes, 0))
+			              FROM objects
 			             WHERE bucket_id = $1), 0)
 			+ COALESCE((SELECT SUM(ov.size_bytes)
 			              FROM object_versions ov

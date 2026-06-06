@@ -28,9 +28,18 @@ func (c *Cleaner) reapTrash(ctx context.Context, rec *runRecord) error {
 	}
 
 	// Pick candidates (no DELETE yet).
+	//
+	// total_bytes MUST include transcoded HLS segments and any pre-flight
+	// reservation that's still parked on the row. Otherwise reaping a
+	// transcoded video leaks transcoded_bytes back into the user's quota
+	// counter (the row is gone, the disk is freed, but used_bytes still
+	// counts the segments). This is the canonical "bucket empty but
+	// used_bytes high" drift source.
 	rows, err := c.db.Query(ctx, `
 		SELECT o.id, o.bucket_id, o.key, b.owner_id,
 		       o.size_bytes
+		       + COALESCE(o.transcoded_bytes, 0)
+		       + COALESCE(o.transcode_reserved_bytes, 0)
 		       + COALESCE((SELECT SUM(size_bytes)
 		                     FROM object_versions WHERE object_id = o.id), 0) AS total_bytes
 		  FROM objects o
