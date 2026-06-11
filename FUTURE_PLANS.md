@@ -166,35 +166,6 @@ behind a profile). Just deletion + docs.
 
 ---
 
-## Scrub the 170 MB postgres dump from `server` repo history
-
-**Why.** The initial commit (`a092531`) to `personals3/server` included
-`backups/2026-05-30T15-27-59Z/postgres.dump.gz` — 170 MB of test dump
-that we've since `git rm --cached`'d. The blob still exists in git
-history, taking up space in every clone forever.
-
-The repo is private so the data isn't publicly leaked, but:
-- Cloning is slower than it should be
-- The dump may contain hashed passwords + user emails from dev DB
-
-**Plan.** One-time `git filter-repo` (or `git-filter-branch` if
-filter-repo isn't installed):
-
-```bash
-git filter-repo --strip-blobs-bigger-than 10M
-git push origin main --force-with-lease
-```
-
-Caveats:
-- Rewrites every commit hash → existing clones diverge
-- Anyone with the repo cloned needs to re-clone (it's just you)
-- Must do this when nothing else is in flight (no pending PRs, etc.)
-
-Low priority. Do it next time you're already doing a force-push for
-some other reason.
-
----
-
 ## Delete unused in-app `/dashboard/docs/*` route
 
 **Why.** The dashboard has a `/dashboard/docs` Next.js page that
@@ -215,6 +186,20 @@ surface and confusion for future readers.
 - Drop `scripts/seed-docs.sh` (no longer needed)
 
 About 15 minutes of removals. Do alongside another cleanup PR.
+
+---
+
+## API key creation hardening
+
+Two small validations on `POST /auth/keys`:
+
+- Server-side validation of the `name` field (length cap + charset) —
+  currently accepted as-is from the client.
+- Per-user cap on the number of active API keys (e.g. 20) so a
+  scripted loop can't create unbounded rows.
+
+Small change in `api/internal/handlers/auth.go`; do alongside another
+auth PR.
 
 ---
 
