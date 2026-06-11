@@ -76,7 +76,4 @@ Thumbs.db
 # CLI lives in its own repo (github.com/personals3/cli) — exclude from server
 # =============================================================================
 /cli/
-docs/
-plan-1.md
-FUTURE_PLANS.md
 .claude

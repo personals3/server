@@ -5,6 +5,8 @@ Runs on your own hardware, globally accessible via Cloudflare Tunnel — no open
 
 🌐 Live at [personals3.tech](https://personals3.tech) · 📚 [User docs](https://developers.personals3.tech) · ⌨️ [`ps3` CLI](https://github.com/personals3/cli)
 
+![PersonalS3 dashboard — storage overview with a live multipart upload in flight](./docs/images/dashboard-overview.png)
+
 ---
 
 ## What it does
@@ -16,6 +18,8 @@ Runs on your own hardware, globally accessible via Cloudflare Tunnel — no open
 - **`ps3` CLI** — cross-platform Go binary (`curl -fsSL https://personals3.tech/install | sh`) with `cp`, `sync`, `share`, `transcode`, shell completion.
 - **Zero-exposure networking** — served through Cloudflare Tunnel; the host machine opens no inbound ports. PostgreSQL and Valkey bind to loopback only.
 - **Self-healing storage** — a dedicated cleaner service verifies disk↔DB integrity with an adaptive Merkle-trie index + fsnotify watcher, and reaps orphaned files, expired trash, and abandoned multipart uploads.
+
+![Bucket file browser — folder navigation, thumbnails, drag-drop and folder uploads, URL import](./docs/images/bucket-browser.png)
 
 ## Architecture
 
