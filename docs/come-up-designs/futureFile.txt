@@ -1,0 +1,2 @@
+1. no server side verification for name or random name generation when creating api key with http;
+ - either remove functionality or add server side verification + limit to number of api keys per user
