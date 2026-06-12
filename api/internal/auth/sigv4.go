@@ -99,10 +99,26 @@ func splitCommaWithSpaces(s string) []string {
 	return out
 }
 
+// maxSignedPayloadBytes caps how much body VerifySigV4 buffers to check a
+// signed payload hash. Verifying a signed payload requires the whole body
+// in memory, so an arbitrarily large signed PUT could balloon the API
+// process. Clients uploading more than this must send
+// x-amz-content-sha256: UNSIGNED-PAYLOAD (aws-cli/boto3 already do over
+// HTTPS) or use multipart. Streaming verification
+// (STREAMING-AWS4-HMAC-SHA256-PAYLOAD) is in FUTURE_PLANS.
+const maxSignedPayloadBytes = 64 << 20 // 64 MiB
+
+// ErrSignedPayloadTooLarge is surfaced to the client verbatim — tell them
+// exactly how to proceed.
+var ErrSignedPayloadTooLarge = fmt.Errorf(
+	"signed payload larger than %d MiB is not supported — send "+
+		"x-amz-content-sha256: UNSIGNED-PAYLOAD for large uploads, or use "+
+		"multipart", maxSignedPayloadBytes>>20)
+
 // VerifySigV4 returns nil if the request's signature matches a freshly-computed
 // one using the given secret key. Returns an error describing the mismatch
-// otherwise. The body is read into memory if the request's signed payload hash
-// is not UNSIGNED-PAYLOAD — keep that in mind for large uploads.
+// otherwise. The body is read into memory (capped at maxSignedPayloadBytes)
+// if the request's signed payload hash is not UNSIGNED-PAYLOAD.
 func VerifySigV4(r *http.Request, comps *SigV4Components, secretKey string) error {
 	// 1. Hash the payload (or use sentinel)
 	payloadHash := r.Header.Get("X-Amz-Content-Sha256")
@@ -112,6 +128,9 @@ func VerifySigV4(r *http.Request, comps *SigV4Components, secretKey string) erro
 	}
 	if payloadHash != unsignedPayloadSentinel {
 		// We need to verify the body matches; this reads it all.
+		if r.ContentLength > maxSignedPayloadBytes {
+			return ErrSignedPayloadTooLarge
+		}
 		bodyHash, err := hashRequestBody(r)
 		if err != nil {
 			return fmt.Errorf("hash body: %w", err)
@@ -291,14 +310,19 @@ func hexSHA256(data []byte) string {
 // a fresh reader, and returns the hex SHA-256.
 //
 // For UNSIGNED-PAYLOAD requests this isn't called, which is critical for
-// large file uploads where buffering would blow memory.
+// large file uploads where buffering would blow memory. Bodies over
+// maxSignedPayloadBytes are rejected — the LimitReader also covers
+// chunked requests that carry no Content-Length.
 func hashRequestBody(r *http.Request) (string, error) {
 	if r.Body == nil {
 		return emptyPayloadSHA256, nil
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSignedPayloadBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if int64(len(body)) > maxSignedPayloadBytes {
+		return "", ErrSignedPayloadTooLarge
 	}
 	_ = r.Body.Close()
 	r.Body = io.NopCloser(strings.NewReader(string(body)))

@@ -106,6 +106,20 @@ abhishek.me subdomain (`s3.abhishek.me`) is a free fallback.
 
 ---
 
+## Streaming SigV4 payload verification
+
+Signed-payload verification (`x-amz-content-sha256: <hex>`) buffers the
+whole body in memory, so it's capped at 64 MiB (`maxSignedPayloadBytes`
+in `api/internal/auth/sigv4.go`); larger signed PUTs get a clear "use
+UNSIGNED-PAYLOAD or multipart" error. The proper fix is implementing
+AWS chunked uploads (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`): per-chunk
+signatures verified as the body streams to disk, no buffering. Involved
+— the chunk framing has to be unwrapped before bytes reach the handler
+— so do it only if a real client turns up that can't send
+UNSIGNED-PAYLOAD.
+
+---
+
 ## Wire check-gitignore.sh into CI
 
 `scripts/check-gitignore.sh` now exists (lints unanchored `.gitignore`
