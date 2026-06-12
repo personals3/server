@@ -3,6 +3,8 @@ package livefeed
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -105,6 +107,39 @@ func TestTrafficSamplerBudget(t *testing.T) {
 	// microseconds this loop takes.
 	if allowed < int(trafficBurst) || allowed > int(trafficBurst)+3 {
 		t.Errorf("sampler allowed %d of 1000 instant events; want ~%d", allowed, int(trafficBurst))
+	}
+}
+
+// Cap rejections must be immediate HTTP errors, never a hung connection:
+// 429 when one client holds too many streams, 503 when the server is at
+// global capacity.
+func TestServeSSECapStatusCodes(t *testing.T) {
+	b := NewBroker()
+
+	for i := 0; i < maxSubsPerIP; i++ {
+		if _, _, err := b.Subscribe("10.0.0.9"); err != nil {
+			t.Fatalf("setup subscribe %d: %v", i, err)
+		}
+	}
+	req := httptest.NewRequest("GET", "/live", nil)
+	req.RemoteAddr = "10.0.0.9:51234"
+	rec := httptest.NewRecorder()
+	b.ServeSSE(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("per-IP cap: want 429, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	for i := len(b.subs); i < maxSubscribers; i++ {
+		if _, _, err := b.Subscribe(fmt.Sprintf("10.2.%d.%d", i/250, i%250)); err != nil {
+			t.Fatalf("setup subscribe %d: %v", i, err)
+		}
+	}
+	req = httptest.NewRequest("GET", "/live", nil)
+	req.RemoteAddr = "10.9.9.9:51234"
+	rec = httptest.NewRecorder()
+	b.ServeSSE(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("global cap: want 503, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }
 

@@ -1,6 +1,7 @@
 package livefeed
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -106,7 +107,13 @@ func (b *Broker) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, cancel, err := b.Subscribe(ip)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		// Reject immediately with a meaningful status — never hang:
+		// 429 = this client has enough streams, 503 = the server does.
+		code := http.StatusServiceUnavailable
+		if errors.Is(err, ErrTooManyFromIP) {
+			code = http.StatusTooManyRequests
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
 	defer cancel()
