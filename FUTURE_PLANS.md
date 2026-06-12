@@ -203,26 +203,6 @@ auth PR.
 
 ---
 
-## Dashboard drift banner: false positive during in-flight uploads
-
-The overview page warns "Recorded used doesn't match the breakdown —
-run scripts/quota-reconcile.sql" whenever `users.used_bytes` differs
-from the per-bucket breakdown sum. But bytes held by an in-flight
-multipart upload are charged to `used_bytes` at reservation time while
-the breakdown only counts settled objects — so during any large upload
-the banner fires spuriously (observed: 172.17 MB recorded vs 42.17 MB
-breakdown with exactly 130 MB held by an active upload).
-
-**Fix:** include active reservations in the breakdown sum (or subtract
-them from `recorded` before comparing). The active-operations API
-already exposes the held bytes, so the dashboard has everything it
-needs; alternatively do the comparison server-side in `GET /auth/storage`
-and ship a `driftBytes` field that accounts for reservations.
-
-Real drift detection still matters — just compare apples to apples.
-
----
-
 ## Things considered and rejected
 
 Recording these so we don't re-litigate the same questions.

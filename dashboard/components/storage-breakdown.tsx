@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
-import { Database, Trash2, Layers, Hourglass, ArchiveRestore } from "lucide-react";
+import { Database, Trash2, Layers, Hourglass, ArchiveRestore, UploadCloud } from "lucide-react";
 import Link from "next/link";
 
 interface BucketEntry {
@@ -24,6 +24,7 @@ interface Breakdown {
   trashBytes: number;
   versionsBytes: number;
   reservedBytes: number;
+  multipartBytes: number;
 }
 
 // Distinct colors per bucket so each shows up on the stacked bar. Cycles for
@@ -39,8 +40,9 @@ const BUCKET_PALETTE = [
   "#f97316", // orange
 ];
 
-const TRASH_COLOR    = "#94a3b8"; // slate (dim — it's "soft" usage)
-const RESERVED_COLOR = "#fbbf24"; // amber (in-flight)
+const TRASH_COLOR     = "#94a3b8"; // slate (dim — it's "soft" usage)
+const RESERVED_COLOR  = "#fbbf24"; // amber (transcode in-flight)
+const MULTIPART_COLOR = "#38bdf8"; // sky (upload in-flight)
 
 export function StorageBreakdown() {
   const [data, setData] = useState<Breakdown | null>(null);
@@ -76,6 +78,12 @@ export function StorageBreakdown() {
   });
   if (data.reservedBytes > 0) {
     segments.push({ label: "Transcode in-flight", color: RESERVED_COLOR, bytes: data.reservedBytes });
+  }
+  // Parts of in-progress multipart uploads — already charged to usedBytes,
+  // not yet visible as objects. Counting them here keeps the drift hint
+  // below from firing spuriously during large uploads.
+  if ((data.multipartBytes ?? 0) > 0) {
+    segments.push({ label: "Upload in-flight", color: MULTIPART_COLOR, bytes: data.multipartBytes });
   }
   if (data.trashBytes > 0) {
     segments.push({ label: "Trash", color: TRASH_COLOR, bytes: data.trashBytes });
@@ -166,6 +174,17 @@ export function StorageBreakdown() {
             <span className="flex-1 text-muted">Transcode reservations (in-flight)</span>
             <span className="font-mono text-xs text-muted tabular-nums">
               {formatBytes(data.reservedBytes)}
+            </span>
+          </div>
+        )}
+
+        {(data.multipartBytes ?? 0) > 0 && (
+          <div className="flex items-center gap-2 text-sm py-1 px-1.5 rounded">
+            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: MULTIPART_COLOR }} />
+            <UploadCloud size={13} className="text-muted shrink-0" />
+            <span className="flex-1 text-muted">Uploads in progress (multipart)</span>
+            <span className="font-mono text-xs text-muted tabular-nums">
+              {formatBytes(data.multipartBytes)}
             </span>
           </div>
         )}

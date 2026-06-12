@@ -429,7 +429,12 @@ type StorageBreakdown struct {
 	// reservedBytes = transcode pre-flight reservations that haven't settled
 	// to actual transcoded_bytes yet. Lives inside the per-bucket numbers
 	// too; surfaced separately so the chart can color it as "in-flight".
-	ReservedBytes    int64 `json:"reservedBytes"`
+	ReservedBytes int64 `json:"reservedBytes"`
+	// multipartBytes = parts of in-progress multipart uploads. Charged to
+	// used_bytes as each part lands but invisible to the objects-based
+	// per-bucket sums until Complete — without this the breakdown looks
+	// like drift during any large upload.
+	MultipartBytes   int64 `json:"multipartBytes"`
 	TotalObjectCount int   `json:"totalObjectCount"`
 }
 
@@ -492,6 +497,15 @@ func (h *AuthHandler) Storage(w http.ResponseWriter, r *http.Request) {
 		  JOIN buckets b ON b.id = o.bucket_id
 		 WHERE b.owner_id = $1`, u.ID,
 	).Scan(&out.VersionsBytes)
+
+	// In-progress multipart uploads hold quota for the parts already
+	// received. No expires_at filter: an expired-but-unreaped upload still
+	// holds its reservation until the cleaner refunds it.
+	_ = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(total_size), 0)
+		  FROM multipart_uploads
+		 WHERE owner_id = $1 AND status = 'in-progress'`, u.ID,
+	).Scan(&out.MultipartBytes)
 
 	// Used = authoritative value from users.used_bytes (kept in sync by
 	// QuotaReserve). The breakdown sum can drift slightly during in-flight
