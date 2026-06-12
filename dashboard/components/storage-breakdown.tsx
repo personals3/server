@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { formatBytes } from "@/lib/format";
+import { DocsLink } from "@/components/ui/docs-link";
 import { Database, Trash2, Layers, Hourglass, ArchiveRestore, UploadCloud } from "lucide-react";
 import Link from "next/link";
 
@@ -135,8 +136,13 @@ export function StorageBreakdown() {
 
       {/* Legend / per-bucket list */}
       <div className="space-y-1.5">
-        <div className="text-[11px] uppercase tracking-wide text-muted">
-          Where it&apos;s going
+        <div className="flex items-baseline justify-between">
+          <span className="text-[11px] uppercase tracking-wide text-muted">
+            Where it&apos;s going
+          </span>
+          <DocsLink slug="quotas/what-counts" className="text-[11px]">
+            What counts?
+          </DocsLink>
         </div>
 
         {buckets.map((b, i) => {

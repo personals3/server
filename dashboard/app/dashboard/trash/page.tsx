@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Trash2, RotateCcw, RefreshCw, AlertTriangle, History as HistoryIcon } from "lucide-react";
@@ -130,7 +131,14 @@ export default function TrashPage() {
     <div>
       <PageHeader
         title="Trash"
-        description={`${items.length} item${items.length === 1 ? "" : "s"} • ${formatBytes(totalBytes)} pending purge. Trashed bytes still count toward your quota until you purge.`}
+        description={
+          <>
+            {items.length} item{items.length === 1 ? "" : "s"} •{" "}
+            {formatBytes(totalBytes)} pending purge. Trashed bytes still count
+            toward your quota until you purge.{" "}
+            <DocsLink slug="files/versioning-and-trash">How trash works</DocsLink>
+          </>
+        }
         actions={
           <Button variant="secondary" onClick={() => void load()}>
             <RefreshCw size={14} /> Refresh

@@ -6,6 +6,7 @@ import { useParams, useSearchParams, useRouter, usePathname } from "next/navigat
 import { api, API, STREAM, getToken, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -1290,7 +1291,12 @@ function PipelineProgress({ info }: { info: ObjectInfo | null }) {
     <div className="bg-bg border border-border rounded p-4 space-y-3">
       <div>
         <div className="flex items-center justify-between text-xs mb-1">
-          <span className="font-semibold">Transcoding pipeline</span>
+          <span className="font-semibold">
+            Transcoding pipeline{" "}
+            <DocsLink slug="streaming/how-transcoding-works" className="font-normal">
+              How it works
+            </DocsLink>
+          </span>
           <span className="text-muted">{finished}/{pipeline.length} stages complete</span>
         </div>
         <div className="h-1.5 bg-border rounded overflow-hidden">

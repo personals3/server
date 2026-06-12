@@ -5,6 +5,7 @@ import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section";
 import { Trash2, Copy, Check } from "lucide-react";
@@ -39,7 +40,12 @@ export default function KeysPage() {
     <div>
       <PageHeader
         title="Credentials"
-        description="API keys for scripts, services, and S3-compatible clients (boto3, aws-cli, rclone)."
+        description={
+          <>
+            API keys for scripts, services, and S3-compatible clients (boto3,
+            aws-cli, rclone). <DocsLink slug="account/api-keys">How keys work</DocsLink>
+          </>
+        }
       />
       <div className="space-y-6">
         <BearerKeysSection keys={keys} reload={load} />
@@ -78,7 +84,13 @@ function BearerKeysSection({ keys, reload }: { keys: KeyDTO[]; reload: () => voi
     <Card>
       <SectionHeader
         title="Bearer API Keys"
-        description={<>Use with <code className="font-mono text-text">Authorization: Bearer psk_...</code> headers.</>}
+        description={
+          <>
+            Use with <code className="font-mono text-text">Authorization: Bearer psk_...</code>{" "}
+            headers. Shown once, revocable any time.{" "}
+            <DocsLink slug="account/api-keys" />
+          </>
+        }
       />
       <form onSubmit={create} className="flex flex-wrap gap-2">
         <Input value={newName} onChange={(e) => setNewName(e.target.value)}
@@ -156,7 +168,15 @@ function S3CredsSection({ creds, reload }: { creds: S3CredDTO[]; reload: () => v
     <Card>
       <SectionHeader
         title="S3 Credentials (AWS SigV4)"
-        description={<>For AWS CLI / boto3 / aws-sdk-*. Configure with <code className="font-mono text-text">aws --endpoint-url=&lt;your-url&gt;/api s3 ...</code></>}
+        description={
+          <>
+            For AWS CLI / boto3 / aws-sdk-*. Configure with{" "}
+            <code className="font-mono text-text">aws --endpoint-url=&lt;your-url&gt;/api s3 ...</code>{" "}
+            — <DocsLink slug="s3-compat/connecting-with-aws-tools">setup guide</DocsLink>{" "}
+            · requests are signed with{" "}
+            <DocsLink slug="s3-compat/how-sigv4-works">SigV4</DocsLink>
+          </>
+        }
       />
 
       <form onSubmit={create} className="flex flex-wrap gap-2">

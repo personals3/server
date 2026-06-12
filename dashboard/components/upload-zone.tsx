@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, DragEvent, ChangeEvent } from "react";
 import { uploadFile, UploadHandle } from "@/lib/multipart";
 import { formatBytes } from "@/lib/format";
+import { DocsLink } from "@/components/ui/docs-link";
 import { Upload, CheckCircle2, XCircle, X } from "lucide-react";
 
 type Status = "queued" | "uploading" | "done" | "error" | "cancelled";
@@ -128,7 +129,9 @@ export function UploadZone({ bucket, prefix = "", onComplete }: Props) {
         <Upload className="mx-auto mb-2 text-muted" size={28} />
         <p className="text-sm font-medium">Drop files here or click to browse</p>
         <p className="text-xs text-muted mt-1">
-          Files &gt;8 MiB are uploaded in 5 MiB chunks with 4-way parallelism
+          Files &gt;8 MiB are uploaded in{" "}
+          <DocsLink slug="uploading/multipart-ui">5 MiB chunks</DocsLink> with
+          4-way parallelism
         </p>
         <input ref={inputRef} type="file" multiple className="hidden" onChange={onFiles} />
       </div>

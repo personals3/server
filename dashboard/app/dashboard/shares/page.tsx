@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -105,7 +106,13 @@ export default function SharesPage() {
     <div>
       <PageHeader
         title="Share links"
-        description="Time-limited public URLs to specific files. They work without a login and expire automatically."
+        description={
+          <>
+            Time-limited public URLs to specific files. They work without a
+            login and expire automatically.{" "}
+            <DocsLink slug="files/sharing">How sharing works</DocsLink>
+          </>
+        }
         actions={
           <div className="flex items-center gap-2">
             <label className="text-xs text-text-soft inline-flex items-center gap-1.5 cursor-pointer">

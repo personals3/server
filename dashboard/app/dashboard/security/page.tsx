@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section";
 import { Shield, ShieldCheck, KeyRound, AlertTriangle, Copy, Check } from "lucide-react";
@@ -134,7 +135,13 @@ export default function SecurityPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="Security"
-        description="Protect your account with two-factor authentication, manage trusted devices, and change your password."
+        description={
+          <>
+            Protect your account with two-factor authentication, manage
+            trusted devices, and change your password.{" "}
+            <DocsLink slug="account/logging-in">Sign-in &amp; 2FA guide</DocsLink>
+          </>
+        }
       />
 
       <div className="space-y-6">
