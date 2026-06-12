@@ -149,26 +149,14 @@ Should take ~5 minutes. Do this before any wider invite.
 
 ---
 
-## Delete unused in-app `/dashboard/docs/*` route
+## Drop the `ps3-docs` bucket from production DB
 
-**Why.** The dashboard has a `/dashboard/docs` Next.js page that
-renders markdown from the `ps3-docs` bucket via the API's `DocsHandler`.
-We migrated to a separate `developers.personals3.tech` site and unlinked
-this route from the nav. But the page + handler still exist on disk and
-in code.
-
-**Status:** harmless — nothing links to it, but it adds maintenance
-surface and confusion for future readers.
-
-**Plan when we revisit:**
-- `rm -rf dashboard/app/dashboard/docs/` (the Next.js page)
-- Remove `DocsHandler` routes from `api/cmd/server/main.go`
-- Delete `api/internal/handlers/docs.go`
-- Drop the `ps3-docs` bucket from production DB (it's been replaced
-  by Cloudflare Pages serving from git)
-- Drop `scripts/seed-docs.sh` (no longer needed)
-
-About 15 minutes of removals. Do alongside another cleanup PR.
+The in-app docs reader (both `/dashboard/docs` and the public `/docs`
+page, plus the API `DocsHandler` and `scripts/seed-docs.sh`) has been
+removed from the codebase — docs live at `developers.personals3.tech`
+now. The only remaining step is operational: drop the `ps3-docs` bucket
+from the production DB (it's been replaced by Cloudflare Pages serving
+from git).
 
 ---
 

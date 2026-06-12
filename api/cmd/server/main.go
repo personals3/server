@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -108,7 +107,6 @@ func main() {
 	s3CredsH := &handlers.S3CredsHandler{DB: pool}
 	importH := &handlers.ImportHandler{DB: pool}
 	shareH := &handlers.ShareHandler{DB: pool, FS: fs, JWTSecret: cfg.JWTSecret, MP: mpH}
-	docsH := &handlers.DocsHandler{DB: pool, FS: fs, PublicBaseURL: publicURL}
 	publicH := &handlers.PublicHandler{DB: pool, FS: fs}
 	trashH := &handlers.TrashHandler{DB: pool, FS: fs, RDB: rdb}
 
@@ -263,17 +261,6 @@ func main() {
 	r.Head("/public/{bucket}",   publicH.Serve)
 	r.Get("/public/{bucket}/*",  publicH.Serve)
 	r.Head("/public/{bucket}/*", publicH.Serve)
-
-	// Docs are public — listing AND HTML viewer. The dashboard's /docs
-	// route renders the same listing without requiring an account.
-	r.Get("/docs", docsH.List)
-	r.Get("/docs/*", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, ".html") {
-			docsH.GetHTML(w, r)
-			return
-		}
-		http.NotFound(w, r)
-	})
 
 	// Authenticated subtree
 	r.Group(func(r chi.Router) {
