@@ -143,15 +143,23 @@ func (h *ObjectHandler) PutObject(w http.ResponseWriter, r *http.Request) {
 	// pgx.ErrNoRows → leave hasExisting=false, existingSize=0
 
 	contentLength := r.ContentLength // -1 if unknown
+	// reserved = bytes actually charged up front, NOT the raw delta
+	// computed from Content-Length. A shrinking overwrite (new size <
+	// existing, versioning off) computes a negative delta, but that
+	// credit must wait until the new bytes are safely on disk — so
+	// nothing is applied here and the post-write reconciliation below
+	// settles it. Folding the unapplied negative delta into `reserved`
+	// used to cancel that settlement: the freed bytes stayed charged
+	// until quota-reconcile.sql, and any size divergence on top computed
+	// its adjustment from a reservation that never happened.
 	reserved := int64(0)
 	if contentLength >= 0 {
-		if versioning {
-			reserved = contentLength // versions stay on disk; no subtract
-		} else {
-			reserved = contentLength - existingSize
-		}
-		if reserved > 0 {
-			if err := middleware.QuotaReserve(r.Context(), h.DB, u.ID, reserved); err != nil {
+		delta := contentLength
+		if !versioning {
+			delta -= existingSize // in-place replacement: net delta
+		} // versioning: old bytes stay on disk as a snapshot; no subtract
+		if delta > 0 {
+			if err := middleware.QuotaReserve(r.Context(), h.DB, u.ID, delta); err != nil {
 				if errors.Is(err, middleware.ErrQuotaExceeded) {
 					httpx.WriteError(w, http.StatusInsufficientStorage, "QUOTA_EXCEEDED",
 						"this upload would exceed your storage quota")
@@ -160,6 +168,7 @@ func (h *ObjectHandler) PutObject(w http.ResponseWriter, r *http.Request) {
 				httpx.WriteError(w, http.StatusInternalServerError, "QUOTA", err.Error())
 				return
 			}
+			reserved = delta
 		}
 	}
 
