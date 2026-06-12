@@ -205,18 +205,26 @@ func (h *ObjectHandler) PutObject(w http.ResponseWriter, r *http.Request) {
 	}
 	if actualDelta != reserved {
 		adjustment := actualDelta - reserved
-		if err := middleware.QuotaReserve(r.Context(), h.DB, u.ID, adjustment); err != nil {
+		if err := quotaAdjust(r.Context(), h.DB, u.ID, adjustment); err != nil {
+			// Quota accounting no longer matches the file we just wrote —
+			// whether the adjustment was rejected (body larger than
+			// Content-Length claimed) or simply never landed (DB error).
+			// Undo the write, restore any snapshot, and refund what was
+			// actually charged (the pre-reservation only ran when positive).
+			_ = h.FS.RemoveCurrentOnly(bucketID.String(), key)
+			if snapPath != "" {
+				_ = os.Rename(snapPath, h.FS.ObjectPath(bucketID.String(), key))
+			}
+			if reserved > 0 {
+				_ = middleware.QuotaReserve(r.Context(), h.DB, u.ID, -reserved)
+			}
 			if errors.Is(err, middleware.ErrQuotaExceeded) {
-				// Body was larger than Content-Length claimed; delete the file we wrote
-				_ = h.FS.RemoveCurrentOnly(bucketID.String(), key)
-				if snapPath != "" {
-					_ = os.Rename(snapPath, h.FS.ObjectPath(bucketID.String(), key))
-				}
-				_ = middleware.QuotaReserve(r.Context(), h.DB, u.ID, -reserved) // refund original
 				httpx.WriteError(w, http.StatusInsufficientStorage, "QUOTA_EXCEEDED",
 					"upload exceeded your storage quota")
 				return
 			}
+			httpx.WriteError(w, http.StatusInternalServerError, "QUOTA", err.Error())
+			return
 		}
 	}
 
