@@ -187,11 +187,16 @@ func (h *MultipartHandler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	reserved := int64(0)
 	if contentLength > 0 {
 		// Subtract any existing part of the same number (re-upload of a part).
+		// ErrNoRows just means first upload of this part number; any other
+		// error would silently double-charge a re-upload, so bail.
 		var oldSize int64
-		_ = h.DB.QueryRow(r.Context(),
+		if err := h.DB.QueryRow(r.Context(),
 			`SELECT size_bytes FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
 			uploadID, partNumber,
-		).Scan(&oldSize)
+		).Scan(&oldSize); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
 		reserved = contentLength - oldSize
 		if reserved > 0 {
 			if err := middleware.QuotaReserve(r.Context(), h.DB, u.ID, reserved); err != nil {
@@ -259,22 +264,32 @@ func (h *MultipartHandler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	if reserved != 0 || contentLength <= 0 {
 		actualDelta := n
 		var oldSize int64
-		_ = h.DB.QueryRow(r.Context(),
+		if err := h.DB.QueryRow(r.Context(),
 			`SELECT size_bytes FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
 			uploadID, partNumber,
-		).Scan(&oldSize)
+		).Scan(&oldSize); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			// Unknown previous size — bail rather than guess: the defer
+			// refunds the reservation and removes the on-disk part.
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
 		actualDelta -= oldSize
 		adjustment := actualDelta - reserved
 		if adjustment != 0 {
-			if err := middleware.QuotaReserve(r.Context(), h.DB, u.ID, adjustment); err != nil {
+			if err := quotaAdjust(r.Context(), h.DB, u.ID, adjustment); err != nil {
 				if errors.Is(err, middleware.ErrQuotaExceeded) {
 					details := middleware.QuotaErrorDetails(r.Context(), h.DB, u.ID, adjustment)
 					httpx.WriteErrorDetails(w, http.StatusInsufficientStorage, "QUOTA_EXCEEDED",
 						"part exceeded your storage quota", details)
 					return
 				}
+				// DB error — the adjustment never landed. Bail out: folding it
+				// into `reserved` anyway would make the defer refund bytes that
+				// were never charged, drifting the user's quota downward.
+				httpx.WriteError(w, http.StatusInternalServerError, "QUOTA", err.Error())
+				return
 			}
-			// On successful adjustment, fold it into `reserved` so the defer
+			// Adjustment applied — fold it into `reserved` so the defer
 			// refunds the right amount if a later step fails.
 			reserved += adjustment
 		}
