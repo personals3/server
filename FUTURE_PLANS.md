@@ -106,30 +106,12 @@ abhishek.me subdomain (`s3.abhishek.me`) is a free fallback.
 
 ---
 
-## CI lint for unrooted `.gitignore` patterns
+## Wire check-gitignore.sh into CI
 
-**Why.** We've hit the same bug **three times** this session:
-- `storage/` rule silently excluded `api/internal/storage/`
-- `ps3` rule silently excluded `cli/cmd/ps3/`
-- `logs/` rule silently excluded `dashboard/app/dashboard/admin/logs/`
-
-Each one produced a confusing "page exists locally but 404s in
-production" or "go build can't find main file" failure. None caught
-in code review.
-
-**Plan.** Add a tiny check to `scripts/`:
-
-```bash
-# scripts/check-gitignore.sh
-# Warns about .gitignore entries without a leading slash that could
-# accidentally match nested files.
-grep -nE '^[a-z][a-z_-]+/$' .gitignore | while read line; do
-  echo "WARN: $line should probably be /<path>/ to anchor to root"
-done
-```
-
-Wire into a pre-commit hook or a GitHub Actions step on PR. Optional
-but cheap insurance.
+`scripts/check-gitignore.sh` now exists (lints unanchored `.gitignore`
+patterns — the `storage/` / `ps3` / `logs/` class of bug; exits 1 on
+findings). Remaining: wire it into a pre-commit hook or a GitHub
+Actions step on PR.
 
 ---
 
