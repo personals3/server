@@ -18,6 +18,7 @@ Runs on your own hardware, globally accessible via Cloudflare Tunnel — no open
 - **`ps3` CLI** — cross-platform Go binary (`curl -fsSL https://personals3.tech/install | sh`) with `cp`, `sync`, `share`, `transcode`, shell completion.
 - **Zero-exposure networking** — served through Cloudflare Tunnel; the host machine opens no inbound ports. PostgreSQL and Valkey bind to loopback only.
 - **Self-healing storage** — a dedicated cleaner service verifies disk↔DB integrity with an adaptive Merkle-trie index + fsnotify watcher, and reaps orphaned files, expired trash, and abandoned multipart uploads.
+- **Live telemetry stream** — `GET /api/live` (SSE, public, no auth) broadcasts privacy-scrubbed activity events — uploads, downloads, transcode lifecycle, errors, 5s gauges — that drive the 3D visualization at [live.personals3.tech](https://live.personals3.tech). Events carry only a type, a coarse size bucket, opaque job tokens, and timestamps; sampling caps the event rate and subscriber slots are bounded (see `api/internal/livefeed/`).
 
 ![Bucket file browser — folder navigation, thumbnails, drag-drop and folder uploads, URL import](./docs/images/bucket-browser.png)
 

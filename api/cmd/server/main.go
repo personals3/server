@@ -23,6 +23,7 @@ import (
 	"github.com/personals3/api/internal/handlers"
 	"github.com/personals3/api/internal/httpx"
 	"github.com/personals3/api/internal/importer"
+	"github.com/personals3/api/internal/livefeed"
 	mw "github.com/personals3/api/internal/middleware"
 	"github.com/personals3/api/internal/storage"
 )
@@ -214,17 +215,27 @@ func main() {
 		objectH.GetObject(w, r)
 	}
 
+	// Live telemetry broker — privacy-scrubbed public event stream for
+	// live.personals3.tech (see internal/livefeed). The middleware samples
+	// request/upload/download/error events; the goroutines add 5s stats
+	// and transcode lifecycle events read from the jobs table.
+	feed := livefeed.NewBroker()
+	feed.StartStats(ctx, pool, cfg.StorageRoot)
+	feed.StartTranscodePoller(ctx, pool)
+
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
+	r.Use(feed.HTTPEvents())
 	// No chi.Timeout — multipart part uploads on slow links can legitimately
 	// take many minutes. Per-request context cancellation still works when
 	// the client disconnects (Go's http server handles that). Nginx caps at
 	// 600s per request, which is the real ceiling.
 
 	// Public routes
+	r.Get("/live", feed.ServeSSE) // SSE — no auth; nothing sensitive by construction
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
