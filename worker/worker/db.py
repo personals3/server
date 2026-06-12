@@ -370,7 +370,7 @@ class Database:
                   done_at = CASE WHEN attempts >= max_attempts THEN now()
                                  ELSE NULL END
                 WHERE id = %s
-                RETURNING status
+                RETURNING status, group_id
                 """,
                 (error[:2000], job_id),
             )
@@ -412,6 +412,22 @@ class Database:
                                               updated_at = now()
                             WHERE id = %s""",
                         (r["id"],),
+                    )
+
+                # A permanently failed leaf strands its group: only
+                # complete_job/skip_job promote 'waiting' jobs, and the
+                # cleaner's stuck-reaper only touches 'processing'. The
+                # object is already marked failed and refunded above, and
+                # the segments dir is reaped — so promoting the finalize
+                # would be wrong. Fail the waiting siblings instead so the
+                # group terminates.
+                if row["group_id"] is not None:
+                    cur.execute(
+                        """UPDATE transcode_jobs
+                              SET status = 'failed', done_at = now(),
+                                  error = 'sibling job failed permanently'
+                            WHERE group_id = %s AND status = 'waiting'""",
+                        (row["group_id"],),
                     )
 
     def healthcheck(self) -> bool:
