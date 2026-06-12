@@ -108,7 +108,6 @@ worker/       Python FFmpeg transcoding worker
 dashboard/    Next.js web UI + admin panel
 db/           SQL migrations (auto-run on first startup)
 nginx/        Front door: routing, static HLS serving
-caddy/        Alternative TLS reverse proxy config
 cloudflared/  Cloudflare Tunnel setup
 scripts/      Secrets init, backup/restore, smoke tests
 docs/         Architecture diagrams, API reference, design notebooks

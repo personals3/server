@@ -149,23 +149,6 @@ Should take ~5 minutes. Do this before any wider invite.
 
 ---
 
-## Caddy removal from docker-compose
-
-**Why.** Cloudflare Tunnel handles all public TLS now. The `caddy/`
-service in docker-compose is dead weight — it used to be the
-public-facing reverse proxy but the named tunnel goes direct to nginx.
-
-**Plan.**
-- Remove the `caddy` service block from `docker-compose.yml`
-- Delete `caddy/` directory
-- Update `docs/deployment.md` to drop the "with Caddy in front" branch
-  (already partially done, finish it)
-
-Risk: zero. The container isn't started in normal compose runs (it was
-behind a profile). Just deletion + docs.
-
----
-
 ## Delete unused in-app `/dashboard/docs/*` route
 
 **Why.** The dashboard has a `/dashboard/docs` Next.js page that

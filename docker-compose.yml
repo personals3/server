@@ -303,41 +303,6 @@ services:
       - s3-net
 
   # ---------------------------------------------------------------------------
-  # Caddy — alternative reverse proxy with AUTOMATIC HTTPS. Opt-in via
-  # --profile caddy. Use this OR nginx OR cloudflared, not multiple at once.
-  #
-  # Set CADDY_DOMAIN in .env to your real domain (must point at this host
-  # for Let's Encrypt). Use CADDY_DOMAIN=localhost for local testing with
-  # Caddy's internal CA (browser shows "not secure" warning).
-  #
-  # Stop nginx first:  docker compose stop nginx
-  # Bring Caddy up:    docker compose --profile caddy up -d caddy
-  # ---------------------------------------------------------------------------
-  caddy:
-    image: caddy:2-alpine
-    container_name: s3-caddy
-    restart: unless-stopped
-    profiles: ["caddy"]
-    depends_on:
-      api:
-        condition: service_started
-      dashboard:
-        condition: service_started
-    ports:
-      - "${CADDY_HTTP_PORT:-80}:80"
-      - "${CADDY_HTTPS_PORT:-443}:443"
-    environment:
-      CADDY_DOMAIN: "${CADDY_DOMAIN:-localhost}"
-      ADMIN_EMAIL: "${ADMIN_EMAIL:-}"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${STORAGE_ROOT}:/storage:ro
-      - caddy_data:/data         # cert storage (persists across restarts!)
-      - caddy_config:/config
-    networks:
-      - s3-net
-
-  # ---------------------------------------------------------------------------
   # Cloudflare Tunnel — global access without port forwarding (Part 9)
   # Two opt-in modes via Docker Compose profiles. Neither starts by default.
   # ---------------------------------------------------------------------------
@@ -385,10 +350,6 @@ volumes:
     name: s3-postgres-data
   valkey_data:
     name: s3-valkey-data
-  caddy_data:        # Caddy's TLS cert store — DO NOT WIPE without backups
-    name: s3-caddy-data
-  caddy_config:
-    name: s3-caddy-config
 
 # Private network — all services talk via service names (postgres, valkey, ...)
 networks:
