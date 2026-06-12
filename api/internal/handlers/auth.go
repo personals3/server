@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -532,12 +533,60 @@ type createKeyResp struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
+// Key-creation guardrails: the name is stored as-is and echoed back in
+// the dashboard, so cap length and charset; the count cap stops a
+// scripted loop from creating unbounded rows.
+const (
+	maxAPIKeyNameLen = 64
+	maxActiveAPIKeys = 20
+)
+
+func validAPIKeyName(name string) bool {
+	if len(name) > maxAPIKeyNameLen {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == ' ' || r == '-' || r == '_' || r == '.' || r == '\'':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // POST /auth/keys — create a new API key for the current user.
 func (h *AuthHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 	u := middleware.MustUser(r.Context())
 
 	var req createKeyReq
 	_ = json.NewDecoder(r.Body).Decode(&req) // name + expiresAt optional
+
+	req.Name = strings.TrimSpace(req.Name)
+	if !validAPIKeyName(req.Name) {
+		httpx.WriteError(w, http.StatusBadRequest, "BAD_KEY_NAME",
+			"key name must be ≤64 characters: letters, digits, spaces, . _ - '")
+		return
+	}
+
+	// Count only keys that still authenticate; expired rows don't block
+	// new ones. Two racing creates can land at cap+1 — fine, this guards
+	// against unbounded growth, not an exact ceiling.
+	var active int
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM api_keys
+		 WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > now())`,
+		u.ID).Scan(&active); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+		return
+	}
+	if active >= maxActiveAPIKeys {
+		httpx.WriteError(w, http.StatusConflict, "KEY_LIMIT",
+			"you already have "+strconv.Itoa(active)+" active API keys (limit "+
+				strconv.Itoa(maxActiveAPIKeys)+") — revoke unused keys first")
+		return
+	}
 
 	plaintext, prefix, err := auth.GenerateAPIKey()
 	if err != nil {

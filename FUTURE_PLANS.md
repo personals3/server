@@ -160,20 +160,6 @@ from git).
 
 ---
 
-## API key creation hardening
-
-Two small validations on `POST /auth/keys`:
-
-- Server-side validation of the `name` field (length cap + charset) —
-  currently accepted as-is from the client.
-- Per-user cap on the number of active API keys (e.g. 20) so a
-  scripted loop can't create unbounded rows.
-
-Small change in `api/internal/handlers/auth.go`; do alongside another
-auth PR.
-
----
-
 ## Things considered and rejected
 
 Recording these so we don't re-litigate the same questions.
