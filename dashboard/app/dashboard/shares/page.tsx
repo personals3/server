@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ListSkeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, Link2, X, Clock, ArrowDown, ArrowUp,
@@ -42,7 +43,7 @@ export default function SharesPage() {
   const toast = useToast();
   const [shares, setShares] = useState<Share[]>([]);
   const [showInactive, setShowInactive] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true); // true on mount → skeleton, not empty-flash
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -138,7 +139,7 @@ export default function SharesPage() {
 
       <Card>
         {busy && shares.length === 0 ? (
-          <p className="text-sm text-muted">Loading...</p>
+          <ListSkeleton rows={4} />
         ) : shares.length === 0 ? (
           <EmptyState
             compact

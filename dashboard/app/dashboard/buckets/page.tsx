@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   Database, Trash2, Film, Image as ImageIcon, FolderArchive, Globe, Lock,
@@ -49,9 +50,13 @@ function BucketsPageInner() {
   // ?create=1 from the dashboard home auto-opens the create form so the
   // "New bucket" buttons keep their promise instead of just navigating here.
   const [buckets, setBuckets] = useState<Bucket[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(searchParams.get("create") === "1");
 
-  const load = () => api<{ buckets: Bucket[] }>("/").then((r) => setBuckets(r.buckets));
+  const load = () =>
+    api<{ buckets: Bucket[] }>("/")
+      .then((r) => setBuckets(r.buckets))
+      .finally(() => setLoading(false));
   useEffect(() => { void load(); }, []);
 
   return (
@@ -76,7 +81,13 @@ function BucketsPageInner() {
         </Card>
       )}
 
-      {buckets.length === 0 ? (
+      {loading && buckets.length === 0 ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}><Skeleton className="h-5 w-1/2 mb-3" /><Skeleton className="h-3 w-3/4 mb-2" /><Skeleton className="h-3 w-2/3" /></Card>
+          ))}
+        </div>
+      ) : buckets.length === 0 ? (
         <Card>
           <EmptyState
             icon={<Database size={20} />}

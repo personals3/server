@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ListSkeleton } from "@/components/ui/skeleton";
 import { Trash2, RotateCcw, RefreshCw, AlertTriangle, History as HistoryIcon } from "lucide-react";
 import { formatBytes, formatDate } from "@/lib/format";
 import { useToast } from "@/components/toast";
@@ -25,7 +26,7 @@ export default function TrashPage() {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [totalBytes, setTotalBytes] = useState(0);
   const [picks, setPicks] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true); // true on mount → skeleton, not empty-flash
   const [err, setErr] = useState<string | null>(null);
 
   const itemKey = (it: TrashItem) => `${it.bucket}\x00${it.key}`;
@@ -190,7 +191,7 @@ export default function TrashPage() {
         </div>
 
         {busy && items.length === 0 ? (
-          <p className="text-sm text-muted">Loading...</p>
+          <ListSkeleton rows={5} />
         ) : err ? (
           <p className="text-sm text-danger">{err}</p>
         ) : items.length === 0 ? (

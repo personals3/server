@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
+import { ListSkeleton } from "@/components/ui/skeleton";
 import {
   Search as SearchIcon, RefreshCw, Database, FileVideo, FileAudio,
   FileImage, FileText, ChevronLeft, ChevronRight, X,
@@ -269,6 +270,12 @@ export default function SearchPage() {
               </table>
             </div>
           )}
+        </Card>
+      )}
+
+      {busy && !data && (
+        <Card>
+          <ListSkeleton rows={6} />
         </Card>
       )}
 
