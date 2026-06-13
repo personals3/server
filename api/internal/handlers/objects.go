@@ -858,22 +858,14 @@ func (h *ObjectHandler) BulkDelete(w http.ResponseWriter, r *http.Request) {
 //   ?delimiter=/        — group keys by the next "/" after prefix:
 //                         keys with no further delimiter return in Contents,
 //                         everything else rolls up into CommonPrefixes ("folders")
-//   ?max-keys=N         — cap, default & max 1000
+//   ?max-keys=N         — S3 cap, default & max 1000
 //
-// This matches S3 ListObjectsV2 semantics. The dashboard uses delimiter=/
-// to render a folder browser; flat listings (delimiter omitted) still work
-// for rclone, scripts, etc.
+// S3 clients get classic ListObjectsV2 (the XML branch below). The dashboard
+// (JSON) gets real pagination + name search via listObjectsJSON — see there.
 func (h *ObjectHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	bucketName := chi.URLParam(r, "bucket")
 	prefix := r.URL.Query().Get("prefix")
 	delimiter := r.URL.Query().Get("delimiter")
-	maxKeysStr := r.URL.Query().Get("max-keys")
-	maxKeys := 1000
-	if maxKeysStr != "" {
-		if n, err := strconv.Atoi(maxKeysStr); err == nil && n > 0 && n <= 1000 {
-			maxKeys = n
-		}
-	}
 
 	bucketID, err := resolveBucket(r, h.DB, bucketName)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -883,6 +875,19 @@ func (h *ObjectHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
 		return
+	}
+
+	if !isS3Client(r) {
+		h.listObjectsJSON(w, r, bucketName, bucketID, prefix, delimiter)
+		return
+	}
+
+	// ----- S3 ListObjectsV2 (XML) — unchanged classic path ------------------
+	maxKeys := 1000
+	if s := r.URL.Query().Get("max-keys"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 1000 {
+			maxKeys = n
+		}
 	}
 
 	// Always fetch by prefix; the delimiter grouping is done in-process so the
@@ -933,33 +938,216 @@ func (h *ObjectHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if isS3Client(r) {
-		res := listBucketResultV2{
-			XMLNS: s3XMLNS, Name: bucketName, Prefix: prefix, Delimiter: delimiter,
-			KeyCount: len(out) + len(commonPrefixes), MaxKeys: maxKeys,
-			IsTruncated: len(raw) == maxKeys,
+	res := listBucketResultV2{
+		XMLNS: s3XMLNS, Name: bucketName, Prefix: prefix, Delimiter: delimiter,
+		KeyCount: len(out) + len(commonPrefixes), MaxKeys: maxKeys,
+		IsTruncated: len(raw) == maxKeys,
+	}
+	for _, o := range out {
+		res.Contents = append(res.Contents, s3Object{
+			Key: o.Key, LastModified: o.LastModified, ETag: `"` + o.ETag + `"`,
+			Size: o.Size, StorageClass: "STANDARD",
+		})
+	}
+	for _, cp := range commonPrefixes {
+		res.CommonPrefixes = append(res.CommonPrefixes, s3CommonPrefix{Prefix: cp})
+	}
+	writeXML(w, http.StatusOK, res)
+}
+
+// listObjectsJSON powers the dashboard browser: real pagination (page/limit)
+// over potentially huge folders, a server-side name filter, and a COMPLETE
+// folder list (not just the folders that happened to fall in the first 1000
+// keys, which is what the old in-process grouping produced).
+//
+// Three modes:
+//   - search set      → flat recursive results within prefix (ILIKE, no folders)
+//   - delimiter="/"   → folder view: DISTINCT subfolders + paginated direct files
+//   - neither         → flat paginated listing under prefix (scripts, folder delete)
+//
+// Response: { objects, commonPrefixes, total, page, limit, pageCount,
+//             count, truncated, prefix, delimiter, search }
+func (h *ObjectHandler) listObjectsJSON(
+	w http.ResponseWriter, r *http.Request,
+	bucketName string, bucketID uuid.UUID, prefix, delimiter string,
+) {
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("search"))
+
+	limit := 1000 // default keeps non-paginating callers (folder delete) working
+	if s := q.Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 1000 {
+			limit = n
 		}
-		for _, o := range out {
-			res.Contents = append(res.Contents, s3Object{
-				Key: o.Key, LastModified: o.LastModified, ETag: `"` + o.ETag + `"`,
-				Size: o.Size, StorageClass: "STANDARD",
-			})
+	} else if s := q.Get("max-keys"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 1000 {
+			limit = n
 		}
-		for _, cp := range commonPrefixes {
-			res.CommonPrefixes = append(res.CommonPrefixes, s3CommonPrefix{Prefix: cp})
+	}
+	page := 1
+	if s := q.Get("page"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 {
+			page = n
 		}
-		writeXML(w, http.StatusOK, res)
-		return
+	}
+	offset := (page - 1) * limit
+
+	// Hide dotfile basenames (folder markers like .keep) so counts/pages are
+	// honest — this used to be a client-side filter that broke as soon as a
+	// page boundary fell on a marker.
+	const notHidden = ` AND key !~ '(^|/)\.[^/]*$' `
+	likePrefix := escapeLike(prefix) + "%"
+	plen := len(prefix) + 1 // substr() is 1-based; first char past the prefix
+
+	folders := []string{}
+	objects := []ObjectDTO{}
+	var total int
+
+	switch {
+	case search != "":
+		// Flat recursive search within the prefix subtree.
+		likeSearch := "%" + escapeLike(search) + "%"
+		if err := h.DB.QueryRow(r.Context(),
+			`SELECT COUNT(*) FROM objects
+			  WHERE bucket_id=$1 AND NOT is_deleted
+			    AND key LIKE $2 ESCAPE '\'
+			    AND key ILIKE $3 ESCAPE '\'`+notHidden,
+			bucketID, likePrefix, likeSearch,
+		).Scan(&total); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		rows, err := h.DB.Query(r.Context(),
+			`SELECT key,size_bytes,etag,content_type,updated_at FROM objects
+			  WHERE bucket_id=$1 AND NOT is_deleted
+			    AND key LIKE $2 ESCAPE '\'
+			    AND key ILIKE $3 ESCAPE '\'`+notHidden+`
+			  ORDER BY key LIMIT $4 OFFSET $5`,
+			bucketID, likePrefix, likeSearch, limit, offset)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		objects = scanObjects(w, rows)
+		if objects == nil {
+			return
+		}
+
+	case delimiter != "":
+		// Folder view: complete DISTINCT subfolder list + paginated direct files.
+		frows, err := h.DB.Query(r.Context(),
+			`SELECT DISTINCT $1::text || split_part(substr(key, $2), '/', 1) || '/' AS folder
+			   FROM objects
+			  WHERE bucket_id=$3 AND NOT is_deleted
+			    AND key LIKE $4 ESCAPE '\'
+			    AND strpos(substr(key, $2), '/') > 0
+			  ORDER BY folder LIMIT 1000`,
+			prefix, plen, bucketID, likePrefix)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		for frows.Next() {
+			var f string
+			if err := frows.Scan(&f); err != nil {
+				frows.Close()
+				httpx.WriteError(w, http.StatusInternalServerError, "SCAN", err.Error())
+				return
+			}
+			folders = append(folders, f)
+		}
+		frows.Close()
+
+		// Direct children: no further '/' after the prefix.
+		direct := `bucket_id=$1 AND NOT is_deleted AND key LIKE $2 ESCAPE '\'
+		           AND strpos(substr(key, $3), '/')=0` + notHidden
+		if err := h.DB.QueryRow(r.Context(),
+			`SELECT COUNT(*) FROM objects WHERE `+direct,
+			bucketID, likePrefix, plen,
+		).Scan(&total); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		rows, err := h.DB.Query(r.Context(),
+			`SELECT key,size_bytes,etag,content_type,updated_at FROM objects
+			  WHERE `+direct+` ORDER BY key LIMIT $4 OFFSET $5`,
+			bucketID, likePrefix, plen, limit, offset)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		objects = scanObjects(w, rows)
+		if objects == nil {
+			return
+		}
+
+	default:
+		// Flat listing under prefix (folder delete, scripts).
+		if err := h.DB.QueryRow(r.Context(),
+			`SELECT COUNT(*) FROM objects
+			  WHERE bucket_id=$1 AND NOT is_deleted AND key LIKE $2 ESCAPE '\'`+notHidden,
+			bucketID, likePrefix,
+		).Scan(&total); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		rows, err := h.DB.Query(r.Context(),
+			`SELECT key,size_bytes,etag,content_type,updated_at FROM objects
+			  WHERE bucket_id=$1 AND NOT is_deleted AND key LIKE $2 ESCAPE '\'`+notHidden+`
+			  ORDER BY key LIMIT $3 OFFSET $4`,
+			bucketID, likePrefix, limit, offset)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "DB", err.Error())
+			return
+		}
+		objects = scanObjects(w, rows)
+		if objects == nil {
+			return
+		}
 	}
 
+	pageCount := 1
+	if total > 0 {
+		pageCount = (total + limit - 1) / limit
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"bucket":         bucketName,
 		"prefix":         prefix,
 		"delimiter":      delimiter,
-		"maxKeys":        maxKeys,
-		"count":          len(out),
-		"objects":        out,
-		"commonPrefixes": commonPrefixes,
-		"truncated":      len(raw) == maxKeys,
+		"search":         search,
+		"page":           page,
+		"limit":          limit,
+		"total":          total,
+		"pageCount":      pageCount,
+		"count":          len(objects),
+		"objects":        objects,
+		"commonPrefixes": folders,
+		"truncated":      offset+len(objects) < total,
 	})
+}
+
+// scanObjects drains a rows of (key,size,etag,content_type,updated_at). On a
+// scan error it writes a 500 and returns nil — callers must check for nil and
+// stop. A successful empty result returns a non-nil empty slice.
+func scanObjects(w http.ResponseWriter, rows pgx.Rows) []ObjectDTO {
+	defer rows.Close()
+	out := []ObjectDTO{}
+	for rows.Next() {
+		var o ObjectDTO
+		if err := rows.Scan(&o.Key, &o.Size, &o.ETag, &o.ContentType, &o.LastModified); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "SCAN", err.Error())
+			return nil
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// escapeLike escapes LIKE/ILIKE metacharacters so user input (prefix, search)
+// matches literally. Paired with ESCAPE '\' in the query.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
