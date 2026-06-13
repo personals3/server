@@ -994,8 +994,12 @@ func (h *ObjectHandler) listObjectsJSON(
 
 	// Hide dotfile basenames (folder markers like .keep) so counts/pages are
 	// honest — this used to be a client-side filter that broke as soon as a
-	// page boundary fell on a marker.
-	const notHidden = ` AND key !~ '(^|/)\.[^/]*$' `
+	// page boundary fell on a marker. ?include-hidden=1 opts out, which the
+	// folder-delete path needs so it reaps markers too.
+	notHidden := ` AND key !~ '(^|/)\.[^/]*$' `
+	if q.Get("include-hidden") == "1" {
+		notHidden = ""
+	}
 	likePrefix := escapeLike(prefix) + "%"
 	plen := len(prefix) + 1 // substr() is 1-based; first char past the prefix
 

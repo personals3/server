@@ -10,6 +10,7 @@ import { DocsLink } from "@/components/ui/docs-link";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionHeader } from "@/components/ui/section";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ListSkeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { UploadZone } from "@/components/upload-zone";
 import { FolderUpload } from "@/components/folder-upload";
@@ -21,7 +22,7 @@ import { useToast } from "@/components/toast";
 import { ShareModal } from "@/components/share-modal";
 import { VersionsModal } from "@/components/versions-modal";
 import { formatBytes, formatDate, classify } from "@/lib/format";
-import { Trash2, Download, FileText, FileVideo, FileAudio, FileImage, RefreshCw, Copy, Check, ExternalLink, Share2, Globe, History, Folder, FolderUp, ChevronRight, Home, FolderOpen, Upload as UploadIcon } from "lucide-react";
+import { Trash2, Download, FileText, FileVideo, FileAudio, FileImage, RefreshCw, Copy, Check, ExternalLink, Share2, Globe, History, Folder, FolderUp, ChevronRight, Home, FolderOpen, Upload as UploadIcon, Search, X, ChevronLeft } from "lucide-react";
 
 interface ObjectDTO {
   key: string;
@@ -57,10 +58,20 @@ export default function BucketPage() {
   const [folders, setFolders] = useState<string[]>([]);
   const [selected, setSelected] = useState<ObjectDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   // Set of full keys currently checked for bulk operations
   const [picks, setPicks] = useState<Set<string>>(new Set());
   const [isPublic, setIsPublic] = useState(false);
   const [versioning, setVersioning] = useState(false);
+
+  // Name filter (debounced into appliedSearch) + server-side paging.
+  const PAGE_SIZE = 100;
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pageCount, setPageCount] = useState(1);
+  const searching = appliedSearch.length > 0;
 
   const navigateTo = (newPath: string) => {
     const np = normalizePath(newPath);
@@ -82,21 +93,31 @@ export default function BucketPage() {
   }, [name]);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
     try {
-      const qs = new URLSearchParams({ delimiter: "/" });
+      const qs = new URLSearchParams({
+        delimiter: "/",
+        limit: String(PAGE_SIZE),
+        page: String(page),
+      });
       if (path) qs.set("prefix", path);
+      if (appliedSearch) qs.set("search", appliedSearch);
       const r = await api<{
         objects: ObjectDTO[];
         commonPrefixes: string[];
+        total: number;
+        pageCount: number;
       }>(`/${name}?${qs.toString()}`);
-      // Hide hidden files (anything whose basename starts with ".") from the
-      // file list — that's where folder marker files like .keep live.
+      // Server already hides dotfile markers; this filter is belt-and-braces.
       const visibleObjects = (r.objects ?? []).filter((o) => {
         const base = o.key.split("/").pop() || "";
         return !base.startsWith(".");
       });
       setObjects(visibleObjects);
       setFolders(r.commonPrefixes ?? []);
+      setTotal(r.total ?? visibleObjects.length);
+      setPageCount(Math.max(1, r.pageCount ?? 1));
       // Drop any picks no longer visible
       setPicks((prev) => {
         const present = new Set(visibleObjects.map((o) => o.key));
@@ -106,8 +127,30 @@ export default function BucketPage() {
       });
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "failed to load");
+    } finally {
+      setLoading(false);
     }
-  }, [name, path]);
+  }, [name, path, page, appliedSearch]);
+
+  // Debounce the filter box, and snap back to page 1 whenever the query
+  // changes so results aren't hidden on a deep page.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setAppliedSearch((prev) => {
+        const next = search.trim();
+        if (next !== prev) setPage(1);
+        return next;
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Entering a new folder clears the filter and paging.
+  useEffect(() => {
+    setSearch("");
+    setAppliedSearch("");
+    setPage(1);
+  }, [path]);
 
   const toggleAll = (checked: boolean) => {
     setPicks(checked ? new Set(objects.map((o) => o.key)) : new Set());
@@ -235,13 +278,19 @@ export default function BucketPage() {
 
   // Delete a folder = bulk-delete every object whose key starts with this prefix.
   // Lists first (flat, no delimiter so we pick up nested files too) then sends
-  // them through the existing POST ?delete bulk endpoint.
+  // them through the existing POST ?delete bulk endpoint. Pages through the
+  // whole subtree (include-hidden so .keep markers go too) so folders with
+  // more than one page of files are fully removed, not truncated at 1000.
   const deleteFolder = async (prefix: string) => {
     try {
-      const r = await api<{ objects: { key: string }[] }>(
-        `/${name}?prefix=${encodeURIComponent(prefix)}`,
-      );
-      const keys = r.objects.map((o) => o.key);
+      const keys: string[] = [];
+      for (let pg = 1; ; pg++) {
+        const r = await api<{ objects: { key: string }[]; truncated: boolean }>(
+          `/${name}?prefix=${encodeURIComponent(prefix)}&include-hidden=1&limit=1000&page=${pg}`,
+        );
+        keys.push(...r.objects.map((o) => o.key));
+        if (!r.truncated) break;
+      }
       if (keys.length === 0) {
         alert(`Folder "${prefix}" is already empty.`);
         void load();
@@ -251,13 +300,20 @@ export default function BucketPage() {
         `Delete folder "${prefix}" and all ${keys.length} file(s) inside?\n\n` +
         `Files will be moved to trash (or hard-deleted if you've turned trash off).`,
       )) return;
-      const del = await api<{ deleted: number; errors: { key: string; error: string }[] }>(
-        `/${name}?delete`,
-        { method: "POST", body: JSON.stringify({ keys }) },
-      );
-      if (del.errors.length > 0) {
-        alert(`Deleted ${del.deleted}, ${del.errors.length} failed:\n` +
-              del.errors.slice(0, 5).map((e) => `${e.key}: ${e.error}`).join("\n"));
+      // The bulk endpoint caps at 1000 keys/request — chunk to cover big folders.
+      let deleted = 0;
+      const errors: { key: string; error: string }[] = [];
+      for (let i = 0; i < keys.length; i += 1000) {
+        const del = await api<{ deleted: number; errors: { key: string; error: string }[] }>(
+          `/${name}?delete`,
+          { method: "POST", body: JSON.stringify({ keys: keys.slice(i, i + 1000) }) },
+        );
+        deleted += del.deleted;
+        errors.push(...del.errors);
+      }
+      if (errors.length > 0) {
+        alert(`Deleted ${deleted}, ${errors.length} failed:\n` +
+              errors.slice(0, 5).map((e) => `${e.key}: ${e.error}`).join("\n"));
       }
       void load();
     } catch (e) {
@@ -294,7 +350,11 @@ export default function BucketPage() {
           <span className="flex items-center gap-2 flex-wrap">
             {isPublic && <Badge variant="warning"><Globe size={10} /> Public</Badge>}
             {versioning && <Badge variant="neutral"><History size={10} /> Versioned</Badge>}
-            <span>{objects.length} {objects.length === 1 ? "file" : "files"}{folders.length > 0 && <>, {folders.length} {folders.length === 1 ? "folder" : "folders"}</>}</span>
+            <span>
+              {searching
+                ? `${total} ${total === 1 ? "match" : "matches"} for "${appliedSearch}"`
+                : <>{total} {total === 1 ? "file" : "files"}{folders.length > 0 && <>, {folders.length} {folders.length === 1 ? "folder" : "folders"}</>}</>}
+            </span>
           </span>
         }
         actions={
@@ -340,6 +400,27 @@ export default function BucketPage() {
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <Breadcrumb path={path} onNavigate={navigateTo} />
           <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={path ? "Search this folder…" : "Search bucket…"}
+                aria-label="Search files by name"
+                className="w-44 sm:w-56 pl-8 pr-7 py-1.5 text-sm rounded-md bg-bg border border-border focus:border-accent outline-none transition-colors"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted hover:text-text"
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
             <NewFolderButton path={path} onCreated={() => void load()} bucket={name} />
             {picks.size > 0 && (
               <button
@@ -352,17 +433,35 @@ export default function BucketPage() {
             )}
           </div>
         </div>
+        {searching && (
+          <p className="text-xs text-muted mb-3 -mt-1">
+            Showing files matching <span className="text-text font-medium">&ldquo;{appliedSearch}&rdquo;</span>
+            {path && <> in <span className="font-mono text-text-soft">{path}</span></>} — folders hidden while searching.
+          </p>
+        )}
         {err && (
           <div className="mb-3 text-sm text-danger bg-danger/5 border border-danger/20 rounded-md px-3 py-2">{err}</div>
         )}
-        {folders.length === 0 && objects.length === 0 ? (
-          <EmptyState
-            compact
-            icon={<FolderOpen size={18} />}
-            title={path ? "This folder is empty" : "Empty bucket"}
-            description={path ? "Upload files using the panel above — they'll land here." : "Drop files in the upload panel above to get started."}
-          />
+        {loading && folders.length === 0 && objects.length === 0 ? (
+          <ListSkeleton rows={8} />
+        ) : folders.length === 0 && objects.length === 0 ? (
+          searching ? (
+            <EmptyState
+              compact
+              icon={<Search size={18} />}
+              title="No files match your search"
+              description={`Nothing here matches "${appliedSearch}". Try a different term or clear the search.`}
+            />
+          ) : (
+            <EmptyState
+              compact
+              icon={<FolderOpen size={18} />}
+              title={path ? "This folder is empty" : "Empty bucket"}
+              description={path ? "Upload files using the panel above — they'll land here." : "Drop files in the upload panel above to get started."}
+            />
+          )
         ) : (
+          <div className={loading ? "opacity-50 pointer-events-none transition-opacity" : "transition-opacity"}>
           <div className="overflow-x-auto -mx-4 sm:mx-0">
           <table className="stack-rows w-full text-sm sm:table-fixed min-w-[600px] sm:min-w-0">
             <colgroup>
@@ -483,6 +582,31 @@ export default function BucketPage() {
               })}
             </tbody>
           </table>
+          </div>
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between gap-3 pt-3 mt-1 border-t border-border-subtle text-xs text-muted">
+              <span className="tabular-nums">
+                {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1 || loading}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border hover:border-accent disabled:opacity-40 disabled:hover:border-border transition-colors"
+                >
+                  <ChevronLeft size={13} /> Prev
+                </button>
+                <span className="tabular-nums px-1">Page {page} / {pageCount}</span>
+                <button
+                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                  disabled={page >= pageCount || loading}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border hover:border-accent disabled:opacity-40 disabled:hover:border-border transition-colors"
+                >
+                  Next <ChevronRight size={13} />
+                </button>
+              </div>
+            </div>
+          )}
           </div>
         )}
       </Card>
