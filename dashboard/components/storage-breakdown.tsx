@@ -45,7 +45,7 @@ const TRASH_COLOR     = "#94a3b8"; // slate (dim — it's "soft" usage)
 const RESERVED_COLOR  = "#fbbf24"; // amber (transcode in-flight)
 const MULTIPART_COLOR = "#38bdf8"; // sky (upload in-flight)
 
-export function StorageBreakdown() {
+export function StorageBreakdown({ isAdmin = false }: { isAdmin?: boolean }) {
   const [data, setData] = useState<Breakdown | null>(null);
 
   useEffect(() => {
@@ -227,16 +227,21 @@ export function StorageBreakdown() {
         )}
       </div>
 
-      {/* Drift hint when the breakdown sum doesn't match used_bytes — useful
-          for spotting quota bugs early. */}
-      {Math.abs(totalShown + data.versionsBytes - data.usedBytes) > 1024 * 1024 && (
-        <div className="text-[11px] text-warning border-t border-border pt-2">
-          <ArchiveRestore size={12} className="inline mr-1" />
-          Recorded used ({formatBytes(data.usedBytes)}) doesn&apos;t match the breakdown
-          ({formatBytes(totalShown + data.versionsBytes)}) — run
-          <span className="font-mono"> scripts/quota-reconcile.sql</span> to fix.
-        </div>
-      )}
+      {/* Drift hint — ADMIN ONLY. The cleaner self-heals drift on its
+          QUOTA_RECONCILE_INTERVAL (default hourly), so regular users never
+          need to see accounting internals; admins get it as an early-warning
+          signal for quota bugs. */}
+      {isAdmin &&
+        Math.abs(totalShown + data.versionsBytes - data.usedBytes) > 1024 * 1024 && (
+          <div className="text-[11px] text-warning border-t border-border pt-2">
+            <ArchiveRestore size={12} className="inline mr-1" />
+            Recorded used ({formatBytes(data.usedBytes)}) doesn&apos;t match the
+            breakdown ({formatBytes(totalShown + data.versionsBytes)}) — the
+            cleaner self-heals this within the hour;
+            <span className="font-mono"> scripts/quota-reconcile.sql</span> fixes
+            it now.
+          </div>
+        )}
     </div>
   );
 }

@@ -179,7 +179,7 @@ export default function OverviewPage() {
         {/* Single storage section — used %, stacked bar, per-bucket breakdown,
             quota-request CTA. No duplicate slim strip + detailed breakdown. */}
         <Card variant="elevated">
-          <StorageBreakdown />
+          <StorageBreakdown isAdmin={user.role === "admin"} />
           <div className="mt-4">
             <QuotaRequestWidget />
           </div>

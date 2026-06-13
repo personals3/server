@@ -76,6 +76,9 @@ type Config struct {
 	OrphanTwoStrike      bool
 	// Safety caps
 	MaxReapsPerTick int
+	// Quota self-heal (see quota.go)
+	QuotaReconcileInterval time.Duration // how often to recompute used_bytes
+	QuotaDriftThreshold    int64         // ignore drift at or below this many bytes
 
 	// Where to write the NDJSON audit logs (under StorageRoot).
 	StorageRoot string
@@ -99,6 +102,8 @@ func LoadConfig() Config {
 		BloomRebuildInterval: envDuration("BLOOM_REBUILD_INTERVAL", 6*time.Hour),
 		OrphanTwoStrike:      envBool("ORPHAN_TWO_STRIKE", true),
 		MaxReapsPerTick:      envInt("MAX_REAPS_PER_TICK", 10000),
+		QuotaReconcileInterval: envDuration("QUOTA_RECONCILE_INTERVAL", time.Hour),
+		QuotaDriftThreshold:    int64(envInt("QUOTA_DRIFT_THRESHOLD_BYTES", 1<<20)),
 		StorageRoot:          os.Getenv("STORAGE_ROOT"),
 	}
 }
@@ -111,6 +116,8 @@ type Cleaner struct {
 	stop     chan struct{}
 	logsDir  string
 	lastFull time.Time
+	// last quota self-heal pass; zero value → first tick after boot runs it.
+	lastQuotaReconcile time.Time
 	// orphan two-strike state — paths seen as candidate on the previous tick.
 	// Lives in memory; reset on cleaner restart. That's fine — first scan
 	// after restart just rebuilds the candidate set; nothing gets deleted
@@ -290,6 +297,14 @@ func (c *Cleaner) runOnce(ctx context.Context) {
 	if time.Since(c.lastFull) >= c.cfg.OrphanScanInterval {
 		c.safe(rec, "orphan_scan", func() error { return c.reapOrphans(ctx, rec) })
 		c.lastFull = time.Now()
+	}
+
+	// ----- Quota self-heal — periodic used_bytes reconciliation -----
+	// Users never see drift; admins see every correction in the audit log.
+	// Safe against concurrent uploads (see quota.go).
+	if time.Since(c.lastQuotaReconcile) >= c.cfg.QuotaReconcileInterval {
+		c.safe(rec, "quota_reconcile", func() error { return c.reconcileQuotas(ctx, rec) })
+		c.lastQuotaReconcile = time.Now()
 	}
 
 	rec.FinishedAt = time.Now().UTC()
